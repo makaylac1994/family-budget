@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Papa from 'papaparse';
-import { db } from './firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { db, auth } from './firebase';
+import { doc, onSnapshot, setDoc, getDoc, updateDoc, arrayUnion, collection } from 'firebase/firestore';
+import {
+  onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
+} from 'firebase/auth';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import {
   Wallet, Receipt, PiggyBank, Target, CalendarClock, Upload, Plus, Trash2,
@@ -55,6 +58,13 @@ const CategoryColorContext = React.createContext({});
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function generateInviteCode() {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O or 1/I, easy to read aloud
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
 }
 
 function formatCurrency(n) {
@@ -191,10 +201,9 @@ function rowToTransaction(row, map, memory) {
   return { id: uid(), date, description, category, amount, type, _memoryMatch: memoryMatch };
 }
 
-/* ---------------------------------- household gate ---------------------------------- */
+/* ---------------------------------- auth gate ---------------------------------- */
 
-function HouseholdGate({ onSubmit }) {
-  const [code, setCode] = useState('');
+function AuthShell({ children }) {
   return (
     <div className="min-h-screen flex items-center justify-center px-5" style={{ background: COLORS.bg }}>
       <style>{`
@@ -207,25 +216,178 @@ function HouseholdGate({ onSubmit }) {
           <span style={{ fontSize: 26 }}>🫙</span>
           <h1 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Family Budget</h1>
         </div>
-        <p className="font-body text-sm mb-4" style={{ color: COLORS.inkSoft }}>
-          Enter your household code. Make one up if this is your first time, then share it with anyone else who should see this data &mdash; everyone using the same code sees the same budget, live.
-        </p>
-        <TextInput
-          placeholder="e.g. smith-family-2026"
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && code.trim()) onSubmit(code.trim()); }}
-        />
-        <div className="mt-3">
-          <PrimaryButton onClick={() => code.trim() && onSubmit(code.trim())} style={{ width: '100%', justifyContent: 'center' }}>
-            <Check size={15} /> Continue
-          </PrimaryButton>
-        </div>
-        <p className="font-body text-xs mt-3" style={{ color: COLORS.inkSoft }}>
-          Anyone who knows this code can view and edit this budget, so pick something specific to your family rather than a common word.
-        </p>
+        {children}
       </div>
     </div>
+  );
+}
+
+function AuthGate() {
+  const [mode, setMode] = useState('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (!email.trim() || !password) return;
+    setBusy(true);
+    setError('');
+    try {
+      if (mode === 'signup') {
+        await createUserWithEmailAndPassword(auth, email.trim(), password);
+      } else {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      }
+    } catch (e) {
+      setError(e.message.replace(/^Firebase:\s*/, ''));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthShell>
+      <p className="font-body text-sm mb-4" style={{ color: COLORS.inkSoft }}>
+        {mode === 'signup' ? 'Create your account to get started.' : 'Sign in to your account.'}
+      </p>
+      <div className="space-y-2">
+        <TextInput type="email" placeholder="Email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <TextInput
+          type="password"
+          placeholder="Password"
+          autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+        />
+      </div>
+      {error && <p className="font-body text-xs mt-2" style={{ color: COLORS.coral }}>{error}</p>}
+      <div className="mt-3">
+        <PrimaryButton onClick={submit} disabled={busy} style={{ width: '100%', justifyContent: 'center' }}>
+          <Check size={15} /> {mode === 'signup' ? 'Create account' : 'Sign in'}
+        </PrimaryButton>
+      </div>
+      <button
+        onClick={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setError(''); }}
+        className="font-body text-xs font-semibold mt-3"
+        style={{ color: COLORS.violet }}
+      >
+        {mode === 'signup' ? 'Already have an account? Sign in' : "Don't have an account? Create one"}
+      </button>
+    </AuthShell>
+  );
+}
+
+function HouseholdSetup({ onCreate, onJoin, onImport }) {
+  const [mode, setMode] = useState('choose');
+  const [code, setCode] = useState('');
+  const [oldCode, setOldCode] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function handleCreate() {
+    setBusy(true);
+    setError('');
+    try {
+      await onCreate();
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+
+  async function handleJoin() {
+    if (!code.trim()) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onJoin(code.trim());
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+
+  async function handleImport() {
+    if (!oldCode.trim()) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onImport(oldCode.trim());
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthShell>
+      {mode === 'choose' && (
+        <>
+          <p className="font-body text-sm mb-4" style={{ color: COLORS.inkSoft }}>
+            Set up a new household, or join one a family member already created.
+          </p>
+          <div className="space-y-2">
+            <PrimaryButton onClick={handleCreate} disabled={busy} style={{ width: '100%', justifyContent: 'center' }}>
+              <Plus size={15} /> Create a new household
+            </PrimaryButton>
+            <GhostButton onClick={() => setMode('join')} style={{ width: '100%', justifyContent: 'center' }}>
+              I have an invite code
+            </GhostButton>
+            <GhostButton onClick={() => setMode('import')} style={{ width: '100%', justifyContent: 'center' }}>
+              Import my old household's data
+            </GhostButton>
+          </div>
+        </>
+      )}
+      {mode === 'join' && (
+        <>
+          <p className="font-body text-sm mb-4" style={{ color: COLORS.inkSoft }}>
+            Enter the invite code a family member shared with you.
+          </p>
+          <TextInput
+            placeholder="e.g. 7K9QRT"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleJoin(); }}
+          />
+          <div className="mt-3 flex gap-2">
+            <GhostButton onClick={() => setMode('choose')}>Back</GhostButton>
+            <PrimaryButton onClick={handleJoin} disabled={busy} style={{ flex: 1, justifyContent: 'center' }}>
+              <Check size={15} /> Join
+            </PrimaryButton>
+          </div>
+        </>
+      )}
+      {mode === 'import' && (
+        <>
+          <p className="font-body text-sm mb-4" style={{ color: COLORS.inkSoft }}>
+            Enter the old household code you used to type in before. This is a one-time move &mdash; it copies that data into a new, private household under your account.
+          </p>
+          <TextInput
+            placeholder="your old code, e.g. smith-family-2026"
+            value={oldCode}
+            onChange={(e) => setOldCode(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleImport(); }}
+          />
+          <div className="mt-3 flex gap-2">
+            <GhostButton onClick={() => setMode('choose')}>Back</GhostButton>
+            <PrimaryButton onClick={handleImport} disabled={busy} style={{ flex: 1, justifyContent: 'center' }}>
+              <Check size={15} /> Import
+            </PrimaryButton>
+          </div>
+        </>
+      )}
+      {error && <p className="font-body text-xs mt-3" style={{ color: COLORS.coral }}>{error}</p>}
+      <button
+        onClick={() => signOut(auth)}
+        className="font-body text-xs font-semibold mt-4"
+        style={{ color: COLORS.inkSoft }}
+      >
+        Sign out
+      </button>
+    </AuthShell>
   );
 }
 
@@ -2120,7 +2282,12 @@ const TABS = [
 ];
 
 export default function App() {
-  const [familyCode, setFamilyCode] = useState(() => window.localStorage.getItem('finance:householdCode') || '');
+  const [authLoading, setAuthLoading] = useState(true);
+  const [user, setUser] = useState(null);
+  const [householdId, setHouseholdId] = useState(null);
+  const [householdLookupDone, setHouseholdLookupDone] = useState(false);
+  const [inviteCode, setInviteCode] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('dashboard');
   const [month, setMonth] = useState(currentMonthStr());
@@ -2132,10 +2299,41 @@ export default function App() {
   const [hiddenCategories, setHiddenCategories] = useState([]);
   const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
 
+  // Track sign-in state.
   useEffect(() => {
-    if (!familyCode) return;
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+      setHouseholdId(null);
+      setHouseholdLookupDone(false);
+    });
+    return unsub;
+  }, []);
+
+  // Once signed in, look up which household this account belongs to.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid));
+        if (!cancelled) {
+          setHouseholdId(snap.exists() ? snap.data().householdId || null : null);
+          setHouseholdLookupDone(true);
+        }
+      } catch (e) {
+        console.error('Household lookup failed', e);
+        if (!cancelled) setHouseholdLookupDone(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  // Once a household is known, subscribe to it live.
+  useEffect(() => {
+    if (!householdId) return;
     setLoading(true);
-    const ref = doc(db, 'households', familyCode);
+    const ref = doc(db, 'households', householdId);
     const unsub = onSnapshot(ref, (snap) => {
       const d = snap.data();
       setTransactions(d?.transactions || []);
@@ -2145,31 +2343,67 @@ export default function App() {
       setCategoryColors(d?.categoryColors || {});
       setHiddenCategories(d?.hiddenCategories || []);
       setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
+      setInviteCode(d?.inviteCode || '');
       setLoading(false);
     }, (err) => {
       console.error('Sync failed', err);
       setLoading(false);
     });
     return unsub;
-  }, [familyCode]);
+  }, [householdId]);
 
   function syncField(field, value) {
-    if (!familyCode) return;
-    setDoc(doc(db, 'households', familyCode), { [field]: value }, { merge: true })
+    if (!householdId) return;
+    setDoc(doc(db, 'households', householdId), { [field]: value }, { merge: true })
       .catch((e) => {
         console.error('Save failed', e);
         window.alert(`Couldn't save your change — it may not persist. (${e.message})`);
       });
   }
 
-  function joinHousehold(code) {
-    window.localStorage.setItem('finance:householdCode', code);
-    setFamilyCode(code);
+  async function createHousehold() {
+    const householdRef = doc(collection(db, 'households'));
+    const code = generateInviteCode();
+    await setDoc(householdRef, {
+      members: [user.uid],
+      inviteCode: code,
+      transactions: [], budgets: {}, goals: [], bills: [],
+      categoryColors: {}, hiddenCategories: [], categoryMemory: { exact: {}, merchant: {} },
+    });
+    await setDoc(doc(db, 'invites', code), { householdId: householdRef.id });
+    await setDoc(doc(db, 'users', user.uid), { householdId: householdRef.id }, { merge: true });
+    setHouseholdId(householdRef.id);
   }
 
-  function leaveHousehold() {
-    window.localStorage.removeItem('finance:householdCode');
-    setFamilyCode('');
+  async function joinHousehold(code) {
+    const inviteSnap = await getDoc(doc(db, 'invites', code.toUpperCase()));
+    if (!inviteSnap.exists()) throw new Error("That invite code wasn't found. Double check it with whoever sent it.");
+    const { householdId: joinedId } = inviteSnap.data();
+    await updateDoc(doc(db, 'households', joinedId), { members: arrayUnion(user.uid) });
+    await setDoc(doc(db, 'users', user.uid), { householdId: joinedId }, { merge: true });
+    setHouseholdId(joinedId);
+  }
+
+  async function importOldHousehold(oldCode) {
+    const oldSnap = await getDoc(doc(db, 'households', oldCode));
+    if (!oldSnap.exists()) throw new Error("Couldn't find a household with that old code. Double check the exact spelling/casing you used before.");
+    const oldData = oldSnap.data();
+    const householdRef = doc(collection(db, 'households'));
+    const code = generateInviteCode();
+    await setDoc(householdRef, {
+      members: [user.uid],
+      inviteCode: code,
+      transactions: oldData.transactions || [],
+      budgets: oldData.budgets || {},
+      goals: oldData.goals || [],
+      bills: oldData.bills || [],
+      categoryColors: oldData.categoryColors || {},
+      hiddenCategories: oldData.hiddenCategories || [],
+      categoryMemory: oldData.categoryMemory || { exact: {}, merchant: {} },
+    });
+    await setDoc(doc(db, 'invites', code), { householdId: householdRef.id });
+    await setDoc(doc(db, 'users', user.uid), { householdId: householdRef.id }, { merge: true });
+    setHouseholdId(householdRef.id);
   }
 
   function updateTransactions(next) { setTransactions(next); syncField('transactions', next); }
@@ -2180,8 +2414,28 @@ export default function App() {
   function updateHiddenCategories(next) { setHiddenCategories(next); syncField('hiddenCategories', next); }
   function updateCategoryMemory(next) { setCategoryMemory(next); syncField('categoryMemory', next); }
 
-  if (!familyCode) {
-    return <HouseholdGate onSubmit={joinHousehold} />;
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
+        <Loader2 size={26} className="animate-spin" style={{ color: COLORS.violet }} />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthGate />;
+  }
+
+  if (!householdLookupDone) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
+        <Loader2 size={26} className="animate-spin" style={{ color: COLORS.violet }} />
+      </div>
+    );
+  }
+
+  if (!householdId) {
+    return <HouseholdSetup onCreate={createHousehold} onJoin={joinHousehold} onImport={importOldHousehold} />;
   }
 
   return (
@@ -2201,14 +2455,25 @@ export default function App() {
           </div>
           <p className="font-body text-sm mt-0.5" style={{ color: COLORS.inkSoft }}>Your shared money, in one place.</p>
         </div>
-        <button
-          onClick={leaveHousehold}
-          className="font-body text-xs font-semibold rounded-full px-3 py-1.5 flex-shrink-0"
-          style={{ color: COLORS.inkSoft, background: COLORS.surface, border: `1px solid ${COLORS.border}` }}
-          title="Switch to a different household code"
-        >
-          {familyCode}
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {inviteCode && (
+            <button
+              onClick={() => { navigator.clipboard?.writeText(inviteCode); }}
+              className="font-body text-xs font-semibold rounded-full px-3 py-1.5"
+              style={{ color: COLORS.violet, background: COLORS.violetSoft }}
+              title="Invite code — click to copy, share with family members"
+            >
+              Invite: {inviteCode}
+            </button>
+          )}
+          <button
+            onClick={() => signOut(auth)}
+            className="font-body text-xs font-semibold rounded-full px-3 py-1.5"
+            style={{ color: COLORS.inkSoft, background: COLORS.surface, border: `1px solid ${COLORS.border}` }}
+          >
+            Sign out
+          </button>
+        </div>
       </header>
 
       <nav className="px-5 sm:px-8">
