@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Papa from 'papaparse';
+import { db } from './firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import {
   Wallet, Receipt, PiggyBank, Target, CalendarClock, Upload, Plus, Trash2,
@@ -189,23 +191,42 @@ function rowToTransaction(row, map, memory) {
   return { id: uid(), date, description, category, amount, type, _memoryMatch: memoryMatch };
 }
 
-/* ---------------------------------- storage (browser localStorage) ---------------------------------- */
+/* ---------------------------------- household gate ---------------------------------- */
 
-async function safeGet(key, fallback) {
-  try {
-    const raw = window.localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch (e) {
-    return fallback;
-  }
-}
-
-async function persist(key, value) {
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch (e) {
-    console.error('Save failed', e);
-  }
+function HouseholdGate({ onSubmit }) {
+  const [code, setCode] = useState('');
+  return (
+    <div className="min-h-screen flex items-center justify-center px-5" style={{ background: COLORS.bg }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+        .font-display { font-family: 'Fredoka', sans-serif; }
+        .font-body { font-family: 'Inter', sans-serif; }
+      `}</style>
+      <div className="rounded-2xl p-6 w-full" style={{ maxWidth: 380, background: COLORS.surface, border: `1px solid ${COLORS.border}`, boxShadow: '0 2px 10px rgba(124,92,252,0.06)' }}>
+        <div className="flex items-center gap-2 mb-1">
+          <span style={{ fontSize: 26 }}>🫙</span>
+          <h1 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Family Budget</h1>
+        </div>
+        <p className="font-body text-sm mb-4" style={{ color: COLORS.inkSoft }}>
+          Enter your household code. Make one up if this is your first time, then share it with anyone else who should see this data &mdash; everyone using the same code sees the same budget, live.
+        </p>
+        <TextInput
+          placeholder="e.g. smith-family-2026"
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && code.trim()) onSubmit(code.trim()); }}
+        />
+        <div className="mt-3">
+          <PrimaryButton onClick={() => code.trim() && onSubmit(code.trim())} style={{ width: '100%', justifyContent: 'center' }}>
+            <Check size={15} /> Continue
+          </PrimaryButton>
+        </div>
+        <p className="font-body text-xs mt-3" style={{ color: COLORS.inkSoft }}>
+          Anyone who knows this code can view and edit this budget, so pick something specific to your family rather than a common word.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 /* ---------------------------------- small UI ---------------------------------- */
@@ -2070,6 +2091,7 @@ const TABS = [
 ];
 
 export default function App() {
+  const [familyCode, setFamilyCode] = useState(() => window.localStorage.getItem('finance:householdCode') || '');
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('dashboard');
   const [month, setMonth] = useState(currentMonthStr());
@@ -2082,32 +2104,53 @@ export default function App() {
   const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const [tx, bg, gl, bl, cc, hc, cm] = await Promise.all([
-        safeGet('finance:transactions', []),
-        safeGet('finance:budgets', {}),
-        safeGet('finance:goals', []),
-        safeGet('finance:bills', []),
-        safeGet('finance:categoryColors', {}),
-        safeGet('finance:hiddenCategories', []),
-        safeGet('finance:categoryMemory', { exact: {}, merchant: {} }),
-      ]);
-      if (!cancelled) {
-        setTransactions(tx); setBudgets(bg); setGoals(gl); setBills(bl); setCategoryColors(cc); setHiddenCategories(hc); setCategoryMemory(cm);
-        setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+    if (!familyCode) return;
+    setLoading(true);
+    const ref = doc(db, 'households', familyCode);
+    const unsub = onSnapshot(ref, (snap) => {
+      const d = snap.data();
+      setTransactions(d?.transactions || []);
+      setBudgets(d?.budgets || {});
+      setGoals(d?.goals || []);
+      setBills(d?.bills || []);
+      setCategoryColors(d?.categoryColors || {});
+      setHiddenCategories(d?.hiddenCategories || []);
+      setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
+      setLoading(false);
+    }, (err) => {
+      console.error('Sync failed', err);
+      setLoading(false);
+    });
+    return unsub;
+  }, [familyCode]);
 
-  function updateTransactions(next) { setTransactions(next); persist('finance:transactions', next); }
-  function updateBudgets(next) { setBudgets(next); persist('finance:budgets', next); }
-  function updateGoals(next) { setGoals(next); persist('finance:goals', next); }
-  function updateBills(next) { setBills(next); persist('finance:bills', next); }
-  function updateCategoryColors(next) { setCategoryColors(next); persist('finance:categoryColors', next); }
-  function updateHiddenCategories(next) { setHiddenCategories(next); persist('finance:hiddenCategories', next); }
-  function updateCategoryMemory(next) { setCategoryMemory(next); persist('finance:categoryMemory', next); }
+  function syncField(field, value) {
+    if (!familyCode) return;
+    setDoc(doc(db, 'households', familyCode), { [field]: value }, { merge: true })
+      .catch((e) => console.error('Save failed', e));
+  }
+
+  function joinHousehold(code) {
+    window.localStorage.setItem('finance:householdCode', code);
+    setFamilyCode(code);
+  }
+
+  function leaveHousehold() {
+    window.localStorage.removeItem('finance:householdCode');
+    setFamilyCode('');
+  }
+
+  function updateTransactions(next) { setTransactions(next); syncField('transactions', next); }
+  function updateBudgets(next) { setBudgets(next); syncField('budgets', next); }
+  function updateGoals(next) { setGoals(next); syncField('goals', next); }
+  function updateBills(next) { setBills(next); syncField('bills', next); }
+  function updateCategoryColors(next) { setCategoryColors(next); syncField('categoryColors', next); }
+  function updateHiddenCategories(next) { setHiddenCategories(next); syncField('hiddenCategories', next); }
+  function updateCategoryMemory(next) { setCategoryMemory(next); syncField('categoryMemory', next); }
+
+  if (!familyCode) {
+    return <HouseholdGate onSubmit={joinHousehold} />;
+  }
 
   return (
     <CategoryColorContext.Provider value={categoryColors}>
@@ -2118,12 +2161,22 @@ export default function App() {
         .font-body { font-family: 'Inter', sans-serif; }
       `}</style>
 
-      <header className="px-5 sm:px-8 pt-6 pb-4">
-        <div className="flex items-center gap-2">
-          <span style={{ fontSize: 26 }}>🫙</span>
-          <h1 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Family Budget</h1>
+      <header className="px-5 sm:px-8 pt-6 pb-4 flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span style={{ fontSize: 26 }}>🫙</span>
+            <h1 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Family Budget</h1>
+          </div>
+          <p className="font-body text-sm mt-0.5" style={{ color: COLORS.inkSoft }}>Your shared money, in one place.</p>
         </div>
-        <p className="font-body text-sm mt-0.5" style={{ color: COLORS.inkSoft }}>Your shared money, in one place.</p>
+        <button
+          onClick={leaveHousehold}
+          className="font-body text-xs font-semibold rounded-full px-3 py-1.5 flex-shrink-0"
+          style={{ color: COLORS.inkSoft, background: COLORS.surface, border: `1px solid ${COLORS.border}` }}
+          title="Switch to a different household code"
+        >
+          {familyCode}
+        </button>
       </header>
 
       <nav className="px-5 sm:px-8">
