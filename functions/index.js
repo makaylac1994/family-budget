@@ -42,6 +42,22 @@ async function assertMember(householdId, uid) {
   }
 }
 
+// Wraps a handler so any underlying error (e.g. from Plaid) is logged in full
+// server-side AND reported back to the client with a real, readable message,
+// instead of the generic "internal" error Firebase shows by default.
+function withErrorReporting(handler) {
+  return async (request) => {
+    try {
+      return await handler(request);
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      console.error('Function failed:', err.response?.data || err);
+      const plaidMessage = err.response?.data?.error_message;
+      throw new HttpsError('internal', plaidMessage || err.message || 'Something went wrong.');
+    }
+  };
+}
+
 const CATEGORY_MAP = {
   FOOD_AND_DRINK: 'Dining Out',
   GROCERIES: 'Groceries',
@@ -143,7 +159,7 @@ async function syncHouseholdInternal(householdId) {
   });
 }
 
-exports.createLinkToken = onCall({ secrets: [PLAID_CLIENT_ID, PLAID_SECRET] }, async (request) => {
+exports.createLinkToken = onCall({ secrets: [PLAID_CLIENT_ID, PLAID_SECRET] }, withErrorReporting(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
   const householdId = await getHouseholdIdForUser(request.auth.uid);
   await assertMember(householdId, request.auth.uid);
@@ -157,9 +173,9 @@ exports.createLinkToken = onCall({ secrets: [PLAID_CLIENT_ID, PLAID_SECRET] }, a
     language: 'en',
   });
   return { linkToken: resp.data.link_token };
-});
+}));
 
-exports.exchangePublicToken = onCall({ secrets: [PLAID_CLIENT_ID, PLAID_SECRET] }, async (request) => {
+exports.exchangePublicToken = onCall({ secrets: [PLAID_CLIENT_ID, PLAID_SECRET] }, withErrorReporting(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
   const { publicToken, institutionName } = request.data || {};
   if (!publicToken) throw new HttpsError('invalid-argument', 'Missing publicToken.');
@@ -180,12 +196,12 @@ exports.exchangePublicToken = onCall({ secrets: [PLAID_CLIENT_ID, PLAID_SECRET] 
 
   await syncHouseholdInternal(householdId);
   return { ok: true };
-});
+}));
 
-exports.syncHousehold = onCall({ secrets: [PLAID_CLIENT_ID, PLAID_SECRET] }, async (request) => {
+exports.syncHousehold = onCall({ secrets: [PLAID_CLIENT_ID, PLAID_SECRET] }, withErrorReporting(async (request) => {
   if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in required.');
   const householdId = await getHouseholdIdForUser(request.auth.uid);
   await assertMember(householdId, request.auth.uid);
   await syncHouseholdInternal(householdId);
   return { ok: true };
-});
+}));
