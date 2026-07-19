@@ -1,8 +1,6 @@
 # Family Budget
 
-A React budgeting app (dashboard, ledger, budgets, savings buckets, recurring bills).
-
-Data is saved in your browser's `localStorage`, so it's per-device/per-browser — it won't sync between your phone and laptop, and clearing browser data will clear it.
+A React budgeting app (dashboard, ledger, accounts, budgets, savings buckets, recurring bills), synced across devices via Firebase, with real per-family-member login and optional bank connections via Plaid.
 
 ## Run it locally
 ```
@@ -10,8 +8,17 @@ npm install
 npm run dev
 ```
 
-## Deploy to GitHub Pages (permanent link)
-See the walkthrough your assistant gave you. Short version:
-1. Push this folder to a new GitHub repo.
-2. In the repo, go to **Settings → Pages → Build and deployment → Source**, select **GitHub Actions**.
-3. Every push to `main` will automatically build and publish to `https://YOUR-USERNAME.github.io/YOUR-REPO-NAME/`.
+## Deploy the frontend (GitHub Pages)
+Push to `main` — GitHub Actions builds and publishes automatically.
+
+## Deploy the backend (Cloud Functions, for Plaid)
+Requires the Firebase CLI and your project on the Blaze plan.
+```
+npm install -g firebase-tools
+firebase login
+firebase functions:secrets:set PLAID_CLIENT_ID
+firebase functions:secrets:set PLAID_SECRET
+firebase deploy --only functions
+firebase deploy --only firestore:rules
+```
+`functions/index.js` defaults to Plaid's `sandbox` environment (fake test banks, safe for development). Change `PLAID_ENV` to `'production'` once you're ready to connect real accounts, then redeploy.

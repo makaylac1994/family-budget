@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { initializeFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
+import { getFunctions } from 'firebase/functions';
 
 // Paste the config object from your Firebase project here.
 // Firebase console → Project settings → General → "Your apps" → Web app → SDK setup and configuration
@@ -19,3 +20,4 @@ const app = initializeApp(firebaseConfig);
 // silently from the UI's perspective — this is why some saves were failing.
 export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
 export const auth = getAuth(app);
+export const functions = getFunctions(app);

@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    match /invites/{code} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if false;
+    }
+
+    match /households/{householdId} {
+      allow read: if request.auth != null && (
+        (('members' in resource.data) && request.auth.uid in resource.data.members)
+        || !('members' in resource.data)
+      );
+      allow create: if request.auth != null && request.resource.data.members == [request.auth.uid];
+      allow update: if request.auth != null && (
+        request.auth.uid in resource.data.members
+        ||
+        (
+          request.resource.data.members == resource.data.members.concat([request.auth.uid])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+        )
+      );
+    }
+
+    // Plaid access tokens. These must NEVER be readable or writable from the
+    // browser — only Cloud Functions (via the Admin SDK, which bypasses these
+    // rules entirely) may touch this collection.
+    match /plaid_items/{itemId} {
+      allow read, write: if false;
+    }
+  }
+}

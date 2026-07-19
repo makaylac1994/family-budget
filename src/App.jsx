@@ -1,15 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Papa from 'papaparse';
-import { db, auth } from './firebase';
+import { db, auth, functions } from './firebase';
 import { doc, onSnapshot, setDoc, getDoc, updateDoc, arrayUnion, collection } from 'firebase/firestore';
 import {
   onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
 } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
+import { usePlaidLink } from 'react-plaid-link';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import {
   Wallet, Receipt, PiggyBank, Target, CalendarClock, Upload, Plus, Trash2,
   Search, ChevronLeft, ChevronRight, ChevronDown, TrendingUp, TrendingDown, X, Check,
-  Loader2, Sparkles, Flame, Scissors, Palette, Settings2, Coins,
+  Loader2, Sparkles, Flame, Scissors, Palette, Settings2, Coins, Landmark, RefreshCw,
 } from 'lucide-react';
 
 /* ---------------------------------- tokens ---------------------------------- */
@@ -2271,11 +2273,143 @@ function BillsView({ bills, updateBills, month, budgets, hiddenCategories }) {
   );
 }
 
+/* ---------------------------------- Accounts ---------------------------------- */
+
+function ConnectBankButton({ onConnected }) {
+  const [linkToken, setLinkToken] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function startConnect() {
+    setBusy(true);
+    setError('');
+    try {
+      const createLinkToken = httpsCallable(functions, 'createLinkToken');
+      const resp = await createLinkToken();
+      setLinkToken(resp.data.linkToken);
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+
+  const { open, ready } = usePlaidLink({
+    token: linkToken,
+    onSuccess: async (publicToken, metadata) => {
+      try {
+        const exchangePublicToken = httpsCallable(functions, 'exchangePublicToken');
+        await exchangePublicToken({ publicToken, institutionName: metadata?.institution?.name });
+        onConnected();
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setBusy(false);
+        setLinkToken(null);
+      }
+    },
+    onExit: () => {
+      setBusy(false);
+      setLinkToken(null);
+    },
+  });
+
+  useEffect(() => {
+    if (linkToken && ready) open();
+  }, [linkToken, ready]);
+
+  return (
+    <div>
+      <PrimaryButton onClick={startConnect} disabled={busy}>
+        <Landmark size={15} /> Connect a bank
+      </PrimaryButton>
+      {error && <p className="font-body text-xs mt-2" style={{ color: COLORS.coral }}>{error}</p>}
+    </div>
+  );
+}
+
+function AccountsView({ accounts }) {
+  const [syncing, setSyncing] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handleSync() {
+    setSyncing(true);
+    setError('');
+    try {
+      const syncHousehold = httpsCallable(functions, 'syncHousehold');
+      await syncHousehold();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  const total = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const byInstitution = {};
+  accounts.forEach((a) => {
+    const key = a.institutionName || 'Bank';
+    if (!byInstitution[key]) byInstitution[key] = [];
+    byInstitution[key].push(a);
+  });
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Accounts</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Connected banks and their latest balances.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {accounts.length > 0 && (
+            <GhostButton onClick={handleSync}>
+              <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing...' : 'Sync now'}
+            </GhostButton>
+          )}
+          <ConnectBankButton onConnected={handleSync} />
+        </div>
+      </div>
+
+      {error && <p className="font-body text-xs" style={{ color: COLORS.coral }}>{error}</p>}
+
+      {accounts.length === 0 ? (
+        <Card><EmptyState icon={Landmark} title="No banks connected yet" subtitle="Click Connect a bank above to securely link a checking, savings, or credit account via Plaid." /></Card>
+      ) : (
+        <>
+          <Card>
+            <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.violet }}>
+              <Wallet size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Total across accounts</span>
+            </div>
+            <p className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>{formatCurrency(total)}</p>
+          </Card>
+
+          {Object.entries(byInstitution).map(([institution, accts]) => (
+            <Card key={institution}>
+              <h3 className="font-display font-semibold mb-3" style={{ color: COLORS.ink }}>{institution}</h3>
+              <div className="space-y-2">
+                {accts.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                    <div>
+                      <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{a.name}{a.mask ? ` ••${a.mask}` : ''}</p>
+                      <p className="font-body text-xs capitalize" style={{ color: COLORS.inkSoft }}>{a.subtype || a.type}</p>
+                    </div>
+                    <span className="font-display font-semibold text-sm" style={{ color: COLORS.ink }}>{formatCurrency(a.balance)}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ---------------------------------- App ---------------------------------- */
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: Wallet },
   { id: 'ledger', label: 'Ledger', icon: Receipt },
+  { id: 'accounts', label: 'Accounts', icon: Landmark },
   { id: 'budgets', label: 'Budgets', icon: PiggyBank },
   { id: 'savings', label: 'Savings', icon: Coins },
   { id: 'bills', label: 'Bills', icon: CalendarClock },
@@ -2298,6 +2432,7 @@ export default function App() {
   const [categoryColors, setCategoryColors] = useState({});
   const [hiddenCategories, setHiddenCategories] = useState([]);
   const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
+  const [accounts, setAccounts] = useState([]);
 
   // Track sign-in state.
   useEffect(() => {
@@ -2343,6 +2478,7 @@ export default function App() {
       setCategoryColors(d?.categoryColors || {});
       setHiddenCategories(d?.hiddenCategories || []);
       setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
+      setAccounts(d?.accounts || []);
       setInviteCode(d?.inviteCode || '');
       setLoading(false);
     }, (err) => {
@@ -2510,6 +2646,9 @@ export default function App() {
             )}
             {tab === 'ledger' && (
               <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} />
+            )}
+            {tab === 'accounts' && (
+              <AccountsView accounts={accounts} />
             )}
             {tab === 'budgets' && (
               <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} />
