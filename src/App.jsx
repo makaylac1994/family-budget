@@ -12,6 +12,7 @@ import {
   Wallet, Receipt, PiggyBank, Target, CalendarClock, Upload, Plus, Trash2,
   Search, ChevronLeft, ChevronRight, ChevronDown, TrendingUp, TrendingDown, X, Check,
   Loader2, Sparkles, Flame, Scissors, Palette, Settings2, Coins, Landmark, RefreshCw,
+  CreditCard, Repeat,
 } from 'lucide-react';
 
 /* ---------------------------------- tokens ---------------------------------- */
@@ -131,6 +132,27 @@ function merchantToken(desc) {
 
 function txSignature(t) {
   return `${t.date}|${Math.round(t.amount * 100)}|${t.type}|${normalizeDescription(t.description)}`;
+}
+
+// Determines whether a transaction was paid from a bank account ('bank') or
+// charged to a credit card ('card'). Explicit manual overrides win; otherwise
+// it's inferred from the connected Plaid account's type; otherwise it falls
+// back to a sensible default by transaction type.
+function paymentSourceFor(t, accountsById) {
+  if (t.paymentSource) return t.paymentSource;
+  if (t.plaidAccountId && accountsById && accountsById[t.plaidAccountId]) {
+    return accountsById[t.plaidAccountId].type === 'credit' ? 'card' : 'bank';
+  }
+  return t.type === 'income' ? 'bank' : 'card';
+}
+
+// Amount to count toward spending totals, excluding any portion allocated to
+// a savings bucket (splits or whole-transaction).
+function nonBucketAmount(t, bucketNameSet) {
+  if (t.splits && t.splits.length) {
+    return t.splits.reduce((sum, sp) => sum + (bucketNameSet.has(sp.category) ? 0 : sp.amount), 0);
+  }
+  return bucketNameSet.has(t.category) ? 0 : t.amount;
 }
 
 function detectHeaderMap(fields) {
@@ -617,26 +639,29 @@ function MonthNav({ month, setMonth }) {
 
 /* ---------------------------------- Dashboard ---------------------------------- */
 
-function DashboardView({ transactions, budgets, bills, goals, month, setMonth, setTab }) {
+function DashboardView({ transactions, budgets, bills, goals, month, setMonth, setTab, accounts }) {
   const categoryColors = React.useContext(CategoryColorContext);
   const [hiddenChartCats, setHiddenChartCats] = useState([]);
   const [showChartFilter, setShowChartFilter] = useState(false);
   const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
+  const accountsById = useMemo(() => Object.fromEntries((accounts || []).map((a) => [a.id, a])), [accounts]);
   const monthTx = useMemo(() => transactions.filter((t) => t.date.startsWith(month)), [transactions, month]);
   const income = monthTx.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const expense = monthTx.filter((t) => t.type === 'expense').reduce((s, t) => {
-    if (t.splits && t.splits.length) {
-      return s + t.splits.reduce((sum, sp) => sum + (bucketNameSet.has(sp.category) ? 0 : sp.amount), 0);
-    }
-    return s + (bucketNameSet.has(t.category) ? 0 : t.amount);
-  }, 0);
+  const expenseTx = monthTx.filter((t) => t.type === 'expense' && !t.excludeFromTotals);
+  const expense = expenseTx.reduce((s, t) => s + nonBucketAmount(t, bucketNameSet), 0);
+  const billsExpense = expenseTx
+    .filter((t) => paymentSourceFor(t, accountsById) === 'bank')
+    .reduce((s, t) => s + nonBucketAmount(t, bucketNameSet), 0);
+  const cardExpense = expenseTx
+    .filter((t) => paymentSourceFor(t, accountsById) === 'card')
+    .reduce((s, t) => s + nonBucketAmount(t, bucketNameSet), 0);
   const net = income - expense;
   const totalSaved = goals.reduce((s, g) => s + (g.saved || 0), 0);
   const plannedBudgetTotal = Object.values(budgets).reduce((s, limit) => s + (Number(limit) || 0), 0);
   const plannedBillsTotal = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0);
 
   const byCategory = {};
-  monthTx.filter((t) => t.type === 'expense').forEach((t) => {
+  expenseTx.forEach((t) => {
     if (t.splits && t.splits.length) {
       t.splits.forEach((s) => {
         if (bucketNameSet.has(s.category)) return;
@@ -671,7 +696,7 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
         <MonthNav month={month} setMonth={setMonth} />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-7 gap-4">
         <Card>
           <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.teal }}>
             <TrendingUp size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Income</span>
@@ -679,10 +704,16 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
           <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(income)}</p>
         </Card>
         <Card>
-          <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.coral }}>
-            <TrendingDown size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Expenses</span>
+          <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.gold }}>
+            <Landmark size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Bills (bank)</span>
           </div>
-          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(expense)}</p>
+          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(billsExpense)}</p>
+        </Card>
+        <Card>
+          <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.coral }}>
+            <CreditCard size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Card charges</span>
+          </div>
+          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(cardExpense)}</p>
         </Card>
         <Card>
           <div className="flex items-center gap-2 mb-1" style={{ color: net >= 0 ? COLORS.violet : COLORS.coral }}>
@@ -884,6 +915,21 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
   const [newBucketName, setNewBucketName] = useState('');
   const [allocateDirection, setAllocateDirection] = useState('deposit');
   const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [sourceFilter, setSourceFilter] = useState('All');
+
+  const accountsById = useMemo(() => Object.fromEntries((accounts || []).map((a) => [a.id, a])), [accounts]);
+
+  function togglePaymentSource(id) {
+    const tx = transactions.find((t) => t.id === id);
+    if (!tx) return;
+    const current = paymentSourceFor(tx, accountsById);
+    const next = current === 'card' ? 'bank' : 'card';
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, paymentSource: next } : t)));
+  }
+
+  function toggleExcluded(id) {
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, excludeFromTotals: !t.excludeFromTotals } : t)));
+  }
 
   const connectedAccountIds = useMemo(() => new Set((accounts || []).map((a) => a.id)), [accounts]);
   const orphanedPlaidCount = useMemo(
@@ -963,9 +1009,10 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
     return transactions
       .filter((t) => t.date.startsWith(month))
       .filter((t) => catFilter === 'All' || t.category === catFilter || (t.splits && t.splits.some((s) => s.category === catFilter)))
+      .filter((t) => sourceFilter === 'All' || paymentSourceFor(t, accountsById) === sourceFilter)
       .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [transactions, month, catFilter, search]);
+  }, [transactions, month, catFilter, sourceFilter, accountsById, search]);
 
   function addTransaction() {
     if (!form.description.trim() || !form.amount) return;
@@ -1322,6 +1369,11 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
             </optgroup>
           )}
         </Select>
+        <Select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} style={{ width: 150 }}>
+          <option value="All">Bank + Card</option>
+          <option value="bank">Bank (bills)</option>
+          <option value="card">Credit card</option>
+        </Select>
         <GhostButton onClick={() => setShowCategoryManager(true)}><Settings2 size={15} /> Categories</GhostButton>
         <GhostButton onClick={() => setShowImport(true)}><Upload size={15} /> Import CSV</GhostButton>
         {orphanedPlaidCount > 0 && (
@@ -1437,6 +1489,36 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                       <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.date}</td>
                       <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>
                         {t.description}
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {(() => {
+                            const src = paymentSourceFor(t, accountsById);
+                            const isCard = src === 'card';
+                            const Icon = isCard ? CreditCard : Landmark;
+                            const color = isCard ? COLORS.violet : COLORS.gold;
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => togglePaymentSource(t.id)}
+                                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold font-body"
+                                style={{ background: `${color}22`, color }}
+                                title={isCard ? 'Charged to credit card — click to mark as bank/bill' : 'Paid from bank — click to mark as credit card'}
+                              >
+                                <Icon size={11} /> {isCard ? 'Card' : 'Bank'}
+                              </button>
+                            );
+                          })()}
+                          <button
+                            type="button"
+                            onClick={() => toggleExcluded(t.id)}
+                            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold font-body"
+                            style={t.excludeFromTotals
+                              ? { background: COLORS.violetSoft, color: COLORS.violet }
+                              : { background: COLORS.bg, color: COLORS.inkSoft }}
+                            title="Mark as a transfer (e.g. paying your credit card bill) so it isn't double-counted as spending"
+                          >
+                            <Repeat size={11} /> {t.excludeFromTotals ? 'Transfer (excluded)' : 'Mark as transfer'}
+                          </button>
+                        </div>
                         {t.savingsAllocations && t.savingsAllocations.length > 0 && (() => {
                           const applied = isAllocationApplied(t);
                           const dir = allocationDirection(t);
@@ -1869,7 +1951,7 @@ function BudgetsView({ budgets, updateBudgets, transactions, month, setMonth, ca
 
   const spentByCategory = useMemo(() => {
     const map = {};
-    transactions.filter((t) => t.type === 'expense' && t.date.startsWith(month)).forEach((t) => {
+    transactions.filter((t) => t.type === 'expense' && !t.excludeFromTotals && t.date.startsWith(month)).forEach((t) => {
       if (t.splits && t.splits.length) {
         t.splits.forEach((s) => {
           if (bucketNameSet.has(s.category)) return;
@@ -2747,7 +2829,7 @@ export default function App() {
         ) : (
           <>
             {tab === 'dashboard' && (
-              <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} />
+              <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} />
             )}
             {tab === 'ledger' && (
               <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} />
