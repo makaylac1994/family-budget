@@ -2089,11 +2089,20 @@ function BudgetsView({ budgets, updateBudgets, transactions, month, setMonth, ca
 
 /* ---------------------------------- Goals ---------------------------------- */
 
-function SavingsView({ goals, updateGoals, transactions }) {
+function SavingsView({ goals, updateGoals, transactions, accounts }) {
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState('');
   const [target, setTarget] = useState('');
   const [deposits, setDeposits] = useState({});
+
+  const SAVINGS_SUBTYPES = ['savings', 'money market', 'cd', 'hsa'];
+  const savingsAccounts = useMemo(
+    () => (accounts || []).filter((a) => SAVINGS_SUBTYPES.includes((a.subtype || '').toLowerCase())),
+    [accounts]
+  );
+  const realSavingsTotal = savingsAccounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const allocatedTotal = goals.reduce((s, g) => s + (g.saved || 0), 0);
+  const reconcileDiff = Math.round((realSavingsTotal - allocatedTotal) * 100) / 100;
 
   const pendingByBucket = useMemo(() => {
     const map = {};
@@ -2152,6 +2161,52 @@ function SavingsView({ goals, updateGoals, transactions }) {
         </div>
         <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New bucket</PrimaryButton>
       </div>
+
+      {savingsAccounts.length > 0 && (
+        <Card style={reconcileDiff !== 0 ? { borderColor: COLORS.gold, background: '#FFFBF0' } : {}}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Reality check</h3>
+            {reconcileDiff === 0 ? (
+              <span className="inline-flex items-center gap-1 font-body text-xs font-semibold" style={{ color: COLORS.teal }}>
+                <Check size={12} /> Buckets match your real balance
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 font-body text-xs font-semibold" style={{ color: COLORS.gold }}>
+                <Flame size={12} /> {reconcileDiff > 0 ? 'Unassigned money' : 'Over-allocated'}
+              </span>
+            )}
+          </div>
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div>
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Real savings balance</p>
+              <p className="font-display font-bold text-lg" style={{ color: COLORS.ink }}>{formatCurrency(realSavingsTotal)}</p>
+              <p className="font-body text-xs mt-0.5" style={{ color: COLORS.inkSoft }}>
+                {savingsAccounts.map((a) => a.name).join(', ')}
+              </p>
+            </div>
+            <div>
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Allocated across buckets</p>
+              <p className="font-display font-bold text-lg" style={{ color: COLORS.ink }}>{formatCurrency(allocatedTotal)}</p>
+            </div>
+            <div>
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{reconcileDiff >= 0 ? 'Unassigned' : 'Over-allocated by'}</p>
+              <p className="font-display font-bold text-lg" style={{ color: reconcileDiff === 0 ? COLORS.teal : COLORS.gold }}>
+                {formatCurrency(Math.abs(reconcileDiff))}
+              </p>
+            </div>
+          </div>
+          {reconcileDiff > 0 && (
+            <p className="font-body text-xs mt-3" style={{ color: COLORS.inkSoft }}>
+              There's {formatCurrency(reconcileDiff)} sitting in savings that isn't claimed by any bucket yet — give it a job below, or it's just a cushion.
+            </p>
+          )}
+          {reconcileDiff < 0 && (
+            <p className="font-body text-xs mt-3" style={{ color: COLORS.coral }}>
+              Your buckets claim {formatCurrency(Math.abs(reconcileDiff))} more than what's actually in savings &mdash; likely some bucket amounts need adjusting, or a withdrawal wasn't recorded.
+            </p>
+          )}
+        </Card>
+      )}
 
       {hasPending && (
         <Card style={{ borderColor: COLORS.gold, background: '#FFFBF0' }}>
@@ -2861,7 +2916,7 @@ export default function App() {
               <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} />
             )}
             {tab === 'savings' && (
-              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} />
+              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} />
             )}
             {tab === 'bills' && (
               <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />
