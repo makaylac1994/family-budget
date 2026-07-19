@@ -2329,6 +2329,7 @@ function ConnectBankButton({ onConnected }) {
 
 function AccountsView({ accounts }) {
   const [syncing, setSyncing] = useState(false);
+  const [disconnectingId, setDisconnectingId] = useState(null);
   const [error, setError] = useState('');
 
   async function handleSync() {
@@ -2344,12 +2345,26 @@ function AccountsView({ accounts }) {
     }
   }
 
+  async function handleDisconnect(itemId, institutionName) {
+    if (!window.confirm(`Disconnect ${institutionName}? Its accounts will be removed, and it will stop pulling new transactions. Past imported transactions stay in your Ledger.`)) return;
+    setDisconnectingId(itemId);
+    setError('');
+    try {
+      const disconnectBank = httpsCallable(functions, 'disconnectBank');
+      await disconnectBank({ itemId });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDisconnectingId(null);
+    }
+  }
+
   const total = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
-  const byInstitution = {};
+  const byItem = {};
   accounts.forEach((a) => {
-    const key = a.institutionName || 'Bank';
-    if (!byInstitution[key]) byInstitution[key] = [];
-    byInstitution[key].push(a);
+    const key = a.itemId || a.institutionName || 'bank';
+    if (!byItem[key]) byItem[key] = { institutionName: a.institutionName || 'Bank', accounts: [] };
+    byItem[key].accounts.push(a);
   });
 
   return (
@@ -2382,9 +2397,19 @@ function AccountsView({ accounts }) {
             <p className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>{formatCurrency(total)}</p>
           </Card>
 
-          {Object.entries(byInstitution).map(([institution, accts]) => (
-            <Card key={institution}>
-              <h3 className="font-display font-semibold mb-3" style={{ color: COLORS.ink }}>{institution}</h3>
+          {Object.entries(byItem).map(([itemId, { institutionName, accounts: accts }]) => (
+            <Card key={itemId}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>{institutionName}</h3>
+                <button
+                  onClick={() => handleDisconnect(itemId, institutionName)}
+                  disabled={disconnectingId === itemId}
+                  className="font-body text-xs font-semibold rounded-full px-2.5 py-1 disabled:opacity-50"
+                  style={{ color: COLORS.coral, background: '#FFE9E9' }}
+                >
+                  {disconnectingId === itemId ? 'Disconnecting...' : 'Disconnect'}
+                </button>
+              </div>
               <div className="space-y-2">
                 {accts.map((a) => (
                   <div key={a.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
