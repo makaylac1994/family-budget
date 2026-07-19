@@ -868,7 +868,7 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
 
 /* ---------------------------------- Ledger ---------------------------------- */
 
-function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals }) {
+function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts }) {
   const [search, setSearch] = useState('');
   const [catFilter, setCatFilter] = useState('All');
   const [showAdd, setShowAdd] = useState(false);
@@ -883,6 +883,34 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
   const [allocateRows, setAllocateRows] = useState([]);
   const [newBucketName, setNewBucketName] = useState('');
   const [allocateDirection, setAllocateDirection] = useState('deposit');
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+
+  const connectedAccountIds = useMemo(() => new Set((accounts || []).map((a) => a.id)), [accounts]);
+  const orphanedPlaidCount = useMemo(
+    () => transactions.filter((t) => t.plaidAccountId && !connectedAccountIds.has(t.plaidAccountId)).length,
+    [transactions, connectedAccountIds]
+  );
+
+  function removeOrphanedPlaidTransactions() {
+    if (!orphanedPlaidCount) return;
+    if (!window.confirm(`Remove ${orphanedPlaidCount} transaction(s) left over from a disconnected bank (like the sandbox test bank)? This can't be undone.`)) return;
+    updateTransactions(transactions.filter((t) => !(t.plaidAccountId && !connectedAccountIds.has(t.plaidAccountId))));
+  }
+
+  function toggleSelected(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function deleteSelected() {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Delete ${selectedIds.size} selected transaction(s)? This can't be undone.`)) return;
+    updateTransactions(transactions.filter((t) => !selectedIds.has(t.id)));
+    setSelectedIds(new Set());
+  }
 
   function allocationDirection(t) {
     return t.savingsDirection || (t.type === 'income' ? 'withdraw' : 'deposit');
@@ -1296,8 +1324,29 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
         </Select>
         <GhostButton onClick={() => setShowCategoryManager(true)}><Settings2 size={15} /> Categories</GhostButton>
         <GhostButton onClick={() => setShowImport(true)}><Upload size={15} /> Import CSV</GhostButton>
+        {orphanedPlaidCount > 0 && (
+          <GhostButton onClick={removeOrphanedPlaidTransactions} style={{ color: COLORS.coral, background: '#FFE9E9' }}>
+            <Trash2 size={15} /> Clean up {orphanedPlaidCount} leftover
+          </GhostButton>
+        )}
         <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> Add entry</PrimaryButton>
       </div>
+
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between rounded-xl px-4 py-2.5" style={{ background: COLORS.violetSoft }}>
+          <span className="font-body text-sm font-semibold" style={{ color: COLORS.violet }}>{selectedIds.size} selected</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setSelectedIds(new Set())} className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Clear</button>
+            <button
+              onClick={deleteSelected}
+              className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold font-body text-white"
+              style={{ background: COLORS.coral }}
+            >
+              <Trash2 size={13} /> Delete selected
+            </button>
+          </div>
+        </div>
+      )}
 
       {showAdd && (
         <Card>
@@ -1344,6 +1393,23 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
             <table className="w-full text-sm font-body">
               <thead>
                 <tr style={{ color: COLORS.inkSoft }} className="text-left border-b" >
+                  <th className="pl-4 pr-1 py-2.5" style={{ width: 30 }}>
+                    <div
+                      onClick={() => {
+                        const visibleIds = filtered.map((t) => t.id);
+                        const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+                        setSelectedIds(allSelected ? new Set() : new Set(visibleIds));
+                      }}
+                      className="flex items-center justify-center cursor-pointer"
+                      style={{
+                        width: 14, height: 14, borderRadius: 4,
+                        border: `1.5px solid ${filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id)) ? COLORS.violet : COLORS.border}`,
+                        background: filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id)) ? COLORS.violet : 'transparent',
+                      }}
+                    >
+                      {filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id)) && <Check size={10} style={{ color: '#fff' }} strokeWidth={3} />}
+                    </div>
+                  </th>
                   <th className="px-4 py-2.5 font-semibold text-xs uppercase tracking-wide">Date</th>
                   <th className="px-4 py-2.5 font-semibold text-xs uppercase tracking-wide">Description</th>
                   <th className="px-4 py-2.5 font-semibold text-xs uppercase tracking-wide">Category</th>
@@ -1355,6 +1421,19 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                 {filtered.map((t) => (
                   <React.Fragment key={t.id}>
                     <tr className="border-b last:border-0" style={{ borderColor: COLORS.border }}>
+                      <td className="pl-4 pr-1 py-2.5">
+                        <div
+                          onClick={() => toggleSelected(t.id)}
+                          className="flex items-center justify-center cursor-pointer"
+                          style={{
+                            width: 14, height: 14, borderRadius: 4,
+                            border: `1.5px solid ${selectedIds.has(t.id) ? COLORS.violet : COLORS.border}`,
+                            background: selectedIds.has(t.id) ? COLORS.violet : 'transparent',
+                          }}
+                        >
+                          {selectedIds.has(t.id) && <Check size={10} style={{ color: '#fff' }} strokeWidth={3} />}
+                        </div>
+                      </td>
                       <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.date}</td>
                       <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>
                         {t.description}
@@ -1443,6 +1522,7 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                     </tr>
                     {t.splits && expandedSplits[t.id] && t.splits.map((s) => (
                       <tr key={s.id} className="border-b last:border-0" style={{ borderColor: COLORS.border, background: COLORS.bg }}>
+                        <td className="px-4 py-2"></td>
                         <td className="px-4 py-2"></td>
                         <td className="px-4 py-2 pl-8 text-xs" style={{ color: COLORS.inkSoft }}>&#8618; portion</td>
                         <td className="px-4 py-2">
@@ -2670,7 +2750,7 @@ export default function App() {
               <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} />
             )}
             {tab === 'ledger' && (
-              <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} />
+              <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} />
             )}
             {tab === 'accounts' && (
               <AccountsView accounts={accounts} />
