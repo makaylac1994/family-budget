@@ -646,7 +646,7 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
   const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
   const accountsById = useMemo(() => Object.fromEntries((accounts || []).map((a) => [a.id, a])), [accounts]);
   const monthTx = useMemo(() => transactions.filter((t) => t.date.startsWith(month)), [transactions, month]);
-  const income = monthTx.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const income = monthTx.filter((t) => t.type === 'income' && !t.excludeFromTotals).reduce((s, t) => s + t.amount, 0);
   const expenseTx = monthTx.filter((t) => t.type === 'expense' && !t.excludeFromTotals);
   const expense = expenseTx.reduce((s, t) => s + nonBucketAmount(t, bucketNameSet), 0);
   const billsExpense = expenseTx
@@ -955,6 +955,12 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
     if (selectedIds.size === 0) return;
     if (!window.confirm(`Delete ${selectedIds.size} selected transaction(s)? This can't be undone.`)) return;
     updateTransactions(transactions.filter((t) => !selectedIds.has(t.id)));
+    setSelectedIds(new Set());
+  }
+
+  function markSelectedAsTransfer(exclude) {
+    if (selectedIds.size === 0) return;
+    updateTransactions(transactions.map((t) => (selectedIds.has(t.id) ? { ...t, excludeFromTotals: exclude } : t)));
     setSelectedIds(new Set());
   }
 
@@ -1389,6 +1395,20 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
           <span className="font-body text-sm font-semibold" style={{ color: COLORS.violet }}>{selectedIds.size} selected</span>
           <div className="flex items-center gap-2">
             <button onClick={() => setSelectedIds(new Set())} className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Clear</button>
+            <button
+              onClick={() => markSelectedAsTransfer(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold font-body"
+              style={{ background: '#fff', color: COLORS.violet }}
+            >
+              <Repeat size={13} /> Mark as transfer
+            </button>
+            <button
+              onClick={() => markSelectedAsTransfer(false)}
+              className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold font-body"
+              style={{ background: '#fff', color: COLORS.inkSoft }}
+            >
+              Unmark transfer
+            </button>
             <button
               onClick={deleteSelected}
               className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold font-body text-white"
