@@ -2100,9 +2100,24 @@ function SavingsView({ goals, updateGoals, transactions, accounts }) {
     () => (accounts || []).filter((a) => SAVINGS_SUBTYPES.includes((a.subtype || '').toLowerCase())),
     [accounts]
   );
-  const realSavingsTotal = savingsAccounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
-  const allocatedTotal = goals.reduce((s, g) => s + (g.saved || 0), 0);
-  const reconcileDiff = Math.round((realSavingsTotal - allocatedTotal) * 100) / 100;
+  const savingsAccountIds = useMemo(() => new Set(savingsAccounts.map((a) => a.id)), [savingsAccounts]);
+
+  const perAccountReconcile = useMemo(() => savingsAccounts.map((a) => {
+    const linkedGoals = goals.filter((g) => g.accountId === a.id);
+    const allocated = linkedGoals.reduce((s, g) => s + (g.saved || 0), 0);
+    const diff = Math.round(((Number(a.balance) || 0) - allocated) * 100) / 100;
+    return { account: a, allocated, diff, linkedGoals };
+  }), [savingsAccounts, goals]);
+
+  const unlinkedGoals = useMemo(
+    () => goals.filter((g) => !g.accountId || !savingsAccountIds.has(g.accountId)),
+    [goals, savingsAccountIds]
+  );
+  const unlinkedTotal = unlinkedGoals.reduce((s, g) => s + (g.saved || 0), 0);
+
+  function updateGoalAccount(id, accountId) {
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, accountId: accountId || undefined } : g)));
+  }
 
   const pendingByBucket = useMemo(() => {
     const map = {};
@@ -2163,46 +2178,49 @@ function SavingsView({ goals, updateGoals, transactions, accounts }) {
       </div>
 
       {savingsAccounts.length > 0 && (
-        <Card style={reconcileDiff !== 0 ? { borderColor: COLORS.gold, background: '#FFFBF0' } : {}}>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Reality check</h3>
-            {reconcileDiff === 0 ? (
-              <span className="inline-flex items-center gap-1 font-body text-xs font-semibold" style={{ color: COLORS.teal }}>
-                <Check size={12} /> Buckets match your real balance
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 font-body text-xs font-semibold" style={{ color: COLORS.gold }}>
-                <Flame size={12} /> {reconcileDiff > 0 ? 'Unassigned money' : 'Over-allocated'}
-              </span>
-            )}
+        <Card>
+          <h3 className="font-display font-semibold mb-3" style={{ color: COLORS.ink }}>Reality check</h3>
+          <div className="space-y-3">
+            {perAccountReconcile.map(({ account, allocated, diff, linkedGoals }) => (
+              <div
+                key={account.id}
+                className="rounded-xl px-3 py-2.5"
+                style={diff !== 0 ? { background: '#FFFBF0', border: `1px solid ${COLORS.gold}` } : { background: COLORS.bg }}
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>
+                    {account.name}{account.mask ? ` ••${account.mask}` : ''}
+                  </span>
+                  {diff === 0 ? (
+                    <span className="inline-flex items-center gap-1 font-body text-xs font-semibold" style={{ color: COLORS.teal }}>
+                      <Check size={11} /> Matches
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 font-body text-xs font-semibold" style={{ color: COLORS.gold }}>
+                      <Flame size={11} /> {diff > 0 ? 'Unassigned money here' : 'Over-allocated here'}
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-2 font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                  <div>
+                    <p>Real balance</p>
+                    <p className="font-display font-semibold text-sm" style={{ color: COLORS.ink }}>{formatCurrency(account.balance)}</p>
+                  </div>
+                  <div>
+                    <p>Linked buckets ({linkedGoals.length})</p>
+                    <p className="font-display font-semibold text-sm" style={{ color: COLORS.ink }}>{formatCurrency(allocated)}</p>
+                  </div>
+                  <div>
+                    <p>{diff >= 0 ? 'Unassigned' : 'Over by'}</p>
+                    <p className="font-display font-semibold text-sm" style={{ color: diff === 0 ? COLORS.teal : COLORS.gold }}>{formatCurrency(Math.abs(diff))}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="grid sm:grid-cols-3 gap-3">
-            <div>
-              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Real savings balance</p>
-              <p className="font-display font-bold text-lg" style={{ color: COLORS.ink }}>{formatCurrency(realSavingsTotal)}</p>
-              <p className="font-body text-xs mt-0.5" style={{ color: COLORS.inkSoft }}>
-                {savingsAccounts.map((a) => a.name).join(', ')}
-              </p>
-            </div>
-            <div>
-              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Allocated across buckets</p>
-              <p className="font-display font-bold text-lg" style={{ color: COLORS.ink }}>{formatCurrency(allocatedTotal)}</p>
-            </div>
-            <div>
-              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{reconcileDiff >= 0 ? 'Unassigned' : 'Over-allocated by'}</p>
-              <p className="font-display font-bold text-lg" style={{ color: reconcileDiff === 0 ? COLORS.teal : COLORS.gold }}>
-                {formatCurrency(Math.abs(reconcileDiff))}
-              </p>
-            </div>
-          </div>
-          {reconcileDiff > 0 && (
+          {unlinkedGoals.length > 0 && (
             <p className="font-body text-xs mt-3" style={{ color: COLORS.inkSoft }}>
-              There's {formatCurrency(reconcileDiff)} sitting in savings that isn't claimed by any bucket yet — give it a job below, or it's just a cushion.
-            </p>
-          )}
-          {reconcileDiff < 0 && (
-            <p className="font-body text-xs mt-3" style={{ color: COLORS.coral }}>
-              Your buckets claim {formatCurrency(Math.abs(reconcileDiff))} more than what's actually in savings &mdash; likely some bucket amounts need adjusting, or a withdrawal wasn't recorded.
+              {unlinkedGoals.length} bucket(s) totaling {formatCurrency(unlinkedTotal)} aren't linked to an account yet, so they're not included above &mdash; link them using the dropdown on each bucket below.
             </p>
           )}
         </Card>
@@ -2280,6 +2298,24 @@ function SavingsView({ goals, updateGoals, transactions, accounts }) {
                   </div>
                   <button onClick={() => removeBucket(g.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500 flex-shrink-0"><Trash2 size={14} /></button>
                 </div>
+
+                {savingsAccounts.length > 0 && (
+                  <div className="mb-2">
+                    <select
+                      value={g.accountId || ''}
+                      onChange={(e) => updateGoalAccount(g.id, e.target.value)}
+                      className="rounded-full pl-2.5 pr-6 py-0.5 text-xs font-semibold font-body outline-none cursor-pointer appearance-none"
+                      style={g.accountId
+                        ? { background: `${COLORS.teal}22`, color: COLORS.teal, border: 'none' }
+                        : { background: COLORS.bg, color: COLORS.inkSoft, border: `1px solid ${COLORS.border}` }}
+                    >
+                      <option value="">Not linked to an account</option>
+                      {savingsAccounts.map((a) => (
+                        <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ••${a.mask}` : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 {hasTarget ? (
                   <>
