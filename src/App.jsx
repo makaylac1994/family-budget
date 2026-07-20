@@ -658,7 +658,6 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
   const net = income - expense;
   const totalSaved = goals.reduce((s, g) => s + (g.saved || 0), 0);
   const plannedBudgetTotal = Object.values(budgets).reduce((s, limit) => s + (Number(limit) || 0), 0);
-  const plannedBillsTotal = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0);
 
   const byCategory = {};
   expenseTx.forEach((t) => {
@@ -696,7 +695,7 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
         <MonthNav month={month} setMonth={setMonth} />
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-7 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <Card>
           <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.teal }}>
             <TrendingUp size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Income</span>
@@ -704,16 +703,20 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
           <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(income)}</p>
         </Card>
         <Card>
-          <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.gold }}>
-            <Landmark size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Bills (bank)</span>
-          </div>
-          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(billsExpense)}</p>
-        </Card>
-        <Card>
           <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.coral }}>
-            <CreditCard size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Card charges</span>
+            <TrendingDown size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Expenses</span>
           </div>
-          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(cardExpense)}</p>
+          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(expense)}</p>
+          <div className="flex items-center gap-3 mt-1.5 pt-1.5" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+            <div className="flex items-center gap-1" style={{ color: COLORS.inkSoft }}>
+              <Landmark size={11} />
+              <span className="font-body text-xs">{formatCurrency(billsExpense)}</span>
+            </div>
+            <div className="flex items-center gap-1" style={{ color: COLORS.inkSoft }}>
+              <CreditCard size={11} />
+              <span className="font-body text-xs">{formatCurrency(cardExpense)}</span>
+            </div>
+          </div>
         </Card>
         <Card>
           <div className="flex items-center gap-2 mb-1" style={{ color: net >= 0 ? COLORS.violet : COLORS.coral }}>
@@ -732,12 +735,6 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
             <Target size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Planned budget</span>
           </div>
           <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(plannedBudgetTotal)}</p>
-        </Card>
-        <Card>
-          <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.gold }}>
-            <CalendarClock size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Planned bills</span>
-          </div>
-          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(plannedBillsTotal)}</p>
         </Card>
       </div>
 
