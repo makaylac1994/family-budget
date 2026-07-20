@@ -657,6 +657,10 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
     .reduce((s, t) => s + nonBucketAmount(t, bucketNameSet), 0);
   const net = income - expense;
   const totalSaved = goals.reduce((s, g) => s + (g.saved || 0), 0);
+  const SAVINGS_SUBTYPES = ['savings', 'money market', 'cd', 'hsa'];
+  const realSavingsTotal = (accounts || [])
+    .filter((a) => SAVINGS_SUBTYPES.includes((a.subtype || '').toLowerCase()))
+    .reduce((s, a) => s + (Number(a.balance) || 0), 0);
   const plannedBudgetTotal = Object.values(budgets).reduce((s, limit) => s + (Number(limit) || 0), 0);
 
   const byCategory = {};
@@ -729,6 +733,14 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
             <PiggyBank size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Total saved</span>
           </div>
           <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(totalSaved)}</p>
+          {realSavingsTotal > 0 && (
+            <div className="flex items-center gap-1.5 mt-1.5 pt-1.5" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+              <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Real balance: {formatCurrency(realSavingsTotal)}</span>
+              {Math.round((realSavingsTotal - totalSaved) * 100) !== 0 && (
+                <Flame size={11} style={{ color: COLORS.gold }} />
+              )}
+            </div>
+          )}
         </Card>
         <Card>
           <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.violet }}>
