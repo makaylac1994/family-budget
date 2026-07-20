@@ -732,10 +732,10 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
           <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.gold }}>
             <PiggyBank size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Total saved</span>
           </div>
-          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(totalSaved)}</p>
+          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(realSavingsTotal || totalSaved)}</p>
           {realSavingsTotal > 0 && (
             <div className="flex items-center gap-1.5 mt-1.5 pt-1.5" style={{ borderTop: `1px solid ${COLORS.border}` }}>
-              <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Real balance: {formatCurrency(realSavingsTotal)}</span>
+              <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Buckets: {formatCurrency(totalSaved)}</span>
               {Math.round((realSavingsTotal - totalSaved) * 100) !== 0 && (
                 <Flame size={11} style={{ color: COLORS.gold }} />
               )}
