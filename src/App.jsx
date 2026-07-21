@@ -884,7 +884,7 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
       <Card>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Upcoming bills</h3>
-          <button onClick={() => setTab('bills')} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>Manage &rarr;</button>
+          <button onClick={() => setTab('settings')} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>Manage &rarr;</button>
         </div>
         {unpaidBills.length === 0 ? (
           <EmptyState icon={CalendarClock} title="All caught up" subtitle="No unpaid bills this month." />
@@ -2593,6 +2593,127 @@ function BillsView({ bills, updateBills, month, budgets, hiddenCategories }) {
   );
 }
 
+/* ---------------------------------- Settings ---------------------------------- */
+
+function NotesSection({ notes, updateNotes }) {
+  const [text, setText] = useState(notes);
+  const [saved, setSaved] = useState(true);
+
+  useEffect(() => { setText(notes); }, [notes]);
+
+  function handleChange(e) {
+    setText(e.target.value);
+    setSaved(false);
+  }
+
+  function handleBlur() {
+    if (text !== notes) updateNotes(text);
+    setSaved(true);
+  }
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Notes</h3>
+        <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{saved ? 'Saved' : 'Saving...'}</span>
+      </div>
+      <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+        Shared with everyone in this household &mdash; a good place to write down category definitions, rules of thumb, or anything you want to stay on the same page about.
+      </p>
+      <textarea
+        value={text}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        rows={8}
+        placeholder={`e.g.\nGroceries = food + household supplies\nShopping = anything from Amazon that isn't a gift\nDining Out = restaurants, coffee, takeout`}
+        className="w-full rounded-xl px-3 py-2 text-sm font-body outline-none resize-y"
+        style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink }}
+        onFocus={(e) => { e.target.style.borderColor = COLORS.violet; }}
+      />
+    </Card>
+  );
+}
+
+function CategoriesSection({ budgets, transactions, goals, hiddenCategories, updateHiddenCategories }) {
+  const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
+  const allCategories = useMemo(() => {
+    const set = new Set([...DEFAULT_EXPENSE_CATEGORIES, ...Object.keys(budgets), 'Income']);
+    transactions.forEach((t) => { if (!bucketNameSet.has(t.category)) set.add(t.category); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [budgets, transactions, bucketNameSet]);
+  const visibleCategories = useMemo(
+    () => allCategories.filter((c) => !hiddenCategories.includes(c)),
+    [allCategories, hiddenCategories]
+  );
+
+  function hideCategory(cat) {
+    if (!hiddenCategories.includes(cat)) updateHiddenCategories([...hiddenCategories, cat]);
+  }
+  function restoreCategory(cat) {
+    updateHiddenCategories(hiddenCategories.filter((c) => c !== cat));
+  }
+
+  return (
+    <Card>
+      <h3 className="font-display font-semibold mb-2" style={{ color: COLORS.ink }}>Categories</h3>
+      <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+        Hide categories you don't use to declutter the dropdowns everywhere in the app. Nothing is deleted — existing transactions keep their category, and you can bring one back anytime.
+      </p>
+      <div className="grid sm:grid-cols-2 gap-4">
+        <div>
+          <p className="font-body text-xs font-semibold mb-1.5" style={{ color: COLORS.inkSoft }}>In use</p>
+          <div className="space-y-1.5">
+            {visibleCategories.filter((c) => c !== 'Income').map((cat) => (
+              <div key={cat} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                <CategoryBadge cat={cat} />
+                <button onClick={() => hideCategory(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Hide from dropdowns">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+            {visibleCategories.filter((c) => c !== 'Income').length === 0 && (
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>No categories to show &mdash; everything's hidden.</p>
+            )}
+          </div>
+        </div>
+        <div>
+          <p className="font-body text-xs font-semibold mb-1.5" style={{ color: COLORS.inkSoft }}>Hidden</p>
+          {hiddenCategories.length === 0 ? (
+            <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Nothing hidden yet.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {hiddenCategories.filter((c) => allCategories.includes(c)).map((cat) => (
+                <div key={cat} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg, opacity: 0.6 }}>
+                  <CategoryBadge cat={cat} />
+                  <button onClick={() => restoreCategory(cat)} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>
+                    Restore
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes }) {
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Settings</h2>
+        <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Notes, categories, and recurring bills, all in one place.</p>
+      </div>
+
+      <NotesSection notes={notes} updateNotes={updateNotes} />
+      <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} />
+      <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />
+    </div>
+  );
+}
+
+
 /* ---------------------------------- Accounts ---------------------------------- */
 
 function ConnectBankButton({ onConnected }) {
@@ -2757,7 +2878,7 @@ const TABS = [
   { id: 'accounts', label: 'Accounts', icon: Landmark },
   { id: 'budgets', label: 'Budgets', icon: PiggyBank },
   { id: 'savings', label: 'Savings', icon: Coins },
-  { id: 'bills', label: 'Bills', icon: CalendarClock },
+  { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
 
 export default function App() {
@@ -2778,6 +2899,7 @@ export default function App() {
   const [hiddenCategories, setHiddenCategories] = useState([]);
   const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
   const [accounts, setAccounts] = useState([]);
+  const [notes, setNotes] = useState('');
 
   // Track sign-in state.
   useEffect(() => {
@@ -2824,6 +2946,7 @@ export default function App() {
       setHiddenCategories(d?.hiddenCategories || []);
       setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
       setAccounts(d?.accounts || []);
+      setNotes(d?.notes || '');
       setInviteCode(d?.inviteCode || '');
       setLoading(false);
     }, (err) => {
@@ -2894,6 +3017,7 @@ export default function App() {
   function updateCategoryColors(next) { setCategoryColors(next); syncField('categoryColors', next); }
   function updateHiddenCategories(next) { setHiddenCategories(next); syncField('hiddenCategories', next); }
   function updateCategoryMemory(next) { setCategoryMemory(next); syncField('categoryMemory', next); }
+  function updateNotes(next) { setNotes(next); syncField('notes', next); }
 
   if (authLoading) {
     return (
@@ -3001,8 +3125,8 @@ export default function App() {
             {tab === 'savings' && (
               <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} />
             )}
-            {tab === 'bills' && (
-              <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />
+            {tab === 'settings' && (
+              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} />
             )}
           </>
         )}
