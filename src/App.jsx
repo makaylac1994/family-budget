@@ -1532,6 +1532,23 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                       <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.date}</td>
                       <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>
                         {t.description}
+                        {t.addedAt && Date.now() - t.addedAt < 24 * 60 * 60 * 1000 && (
+                          <span
+                            className="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-bold font-body ml-1.5"
+                            style={{ background: COLORS.teal, color: '#fff' }}
+                          >
+                            New
+                          </span>
+                        )}
+                        {t.pendingRemoval && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs font-bold font-body ml-1.5"
+                            style={{ background: COLORS.gold, color: '#fff' }}
+                            title="Review this in the Accounts tab"
+                          >
+                            <Flame size={9} /> Needs review
+                          </span>
+                        )}
                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                           {(() => {
                             const src = paymentSourceFor(t, accountsById);
@@ -2831,10 +2848,11 @@ function ConnectBankButton({ onConnected }) {
   const { open, ready } = usePlaidLink({
     token: linkToken,
     onSuccess: async (publicToken, metadata) => {
+      const startedAt = Date.now();
       try {
         const exchangePublicToken = httpsCallable(functions, 'exchangePublicToken');
         const resp = await exchangePublicToken({ publicToken, institutionName: metadata?.institution?.name });
-        onConnected(resp.data);
+        onConnected(resp.data, startedAt);
       } catch (e) {
         setError(e.message);
       } finally {
@@ -2862,19 +2880,25 @@ function ConnectBankButton({ onConnected }) {
   );
 }
 
-function AccountsView({ accounts }) {
+function AccountsView({ accounts, transactions, updateTransactions }) {
   const [syncing, setSyncing] = useState(false);
   const [disconnectingId, setDisconnectingId] = useState(null);
   const [error, setError] = useState('');
   const [lastSync, setLastSync] = useState(null);
+  const [syncPopup, setSyncPopup] = useState(null); // { summary, startedAt }
+  const [showReviewModal, setShowReviewModal] = useState(false);
+
+  const pendingReview = useMemo(() => transactions.filter((t) => t.pendingRemoval), [transactions]);
 
   async function handleSync() {
     setSyncing(true);
     setError('');
+    const startedAt = Date.now();
     try {
       const syncHousehold = httpsCallable(functions, 'syncHousehold');
       const resp = await syncHousehold();
       setLastSync(resp.data);
+      setSyncPopup({ summary: resp.data, startedAt });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -2882,14 +2906,42 @@ function AccountsView({ accounts }) {
     }
   }
 
+  function handleConnected(summary, startedAt) {
+    setLastSync(summary);
+    setSyncPopup({ summary, startedAt });
+  }
+
   function summaryText(s) {
     if (!s) return null;
     const parts = [];
     if (s.added) parts.push(`${s.added} new`);
     if (s.modified) parts.push(`${s.modified} updated`);
-    if (s.removed) parts.push(`${s.removed} removed by bank`);
-    if (s.deduped) parts.push(`${s.deduped} duplicate${s.deduped > 1 ? 's' : ''} skipped`);
+    if (s.removed) parts.push(`${s.removed} flagged by bank`);
+    if (s.deduped) parts.push(`${s.deduped} possible duplicate${s.deduped > 1 ? 's' : ''}`);
     return parts.length ? parts.join(', ') : 'No changes';
+  }
+
+  function keepTransaction(id) {
+    updateTransactions(transactions.map((t) => (
+      t.id === id ? { ...t, pendingRemoval: false, pendingRemovalReason: undefined, duplicateOfId: undefined } : t
+    )));
+  }
+
+  function deleteTransaction(id) {
+    updateTransactions(transactions.filter((t) => t.id !== id));
+  }
+
+  function keepAllPending() {
+    const ids = new Set(pendingReview.map((t) => t.id));
+    updateTransactions(transactions.map((t) => (
+      ids.has(t.id) ? { ...t, pendingRemoval: false, pendingRemovalReason: undefined, duplicateOfId: undefined } : t
+    )));
+  }
+
+  function deleteAllPending() {
+    if (!window.confirm(`Delete all ${pendingReview.length} flagged transaction(s)? This can't be undone.`)) return;
+    const ids = new Set(pendingReview.map((t) => t.id));
+    updateTransactions(transactions.filter((t) => !ids.has(t.id)));
   }
 
   async function handleDisconnect(itemId, institutionName) {
@@ -2922,12 +2974,21 @@ function AccountsView({ accounts }) {
           <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Connected banks and their latest balances.</p>
         </div>
         <div className="flex items-center gap-2">
+          {pendingReview.length > 0 && (
+            <button
+              onClick={() => setShowReviewModal(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold font-body"
+              style={{ color: COLORS.coral, background: '#FFE9E9' }}
+            >
+              <Flame size={14} /> {pendingReview.length} need{pendingReview.length === 1 ? 's' : ''} review
+            </button>
+          )}
           {accounts.length > 0 && (
             <GhostButton onClick={handleSync}>
               <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing...' : 'Sync now'}
             </GhostButton>
           )}
-          <ConnectBankButton onConnected={setLastSync} />
+          <ConnectBankButton onConnected={handleConnected} />
         </div>
       </div>
 
@@ -2974,6 +3035,126 @@ function AccountsView({ accounts }) {
             </Card>
           ))}
         </>
+      )}
+
+      {syncPopup && (() => {
+        const cutoff = syncPopup.startedAt - 2 * 60 * 1000; // small buffer for clock skew
+        const newTx = transactions
+          .filter((t) => t.addedAt && t.addedAt >= cutoff && !t.pendingRemoval)
+          .sort((a, b) => b.date.localeCompare(a.date));
+        const flagged = transactions.filter((t) => t.pendingRemoval);
+        return (
+          <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+            <Card style={{ maxWidth: 520, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Sync results</h3>
+                <button onClick={() => setSyncPopup(null)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+              </div>
+
+              {newTx.length === 0 && flagged.length === 0 ? (
+                <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>No new activity this time.</p>
+              ) : (
+                <>
+                  {newTx.length > 0 && (
+                    <div className="mb-4">
+                      <p className="font-body text-xs font-semibold mb-2" style={{ color: COLORS.inkSoft }}>
+                        {newTx.length} new transaction{newTx.length > 1 ? 's' : ''}
+                      </p>
+                      <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                        {newTx.map((t) => (
+                          <div key={t.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                            <div className="min-w-0">
+                              <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{t.date} &middot; {t.category}</p>
+                            </div>
+                            <span className="font-display font-semibold text-sm flex-shrink-0 ml-2" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                              {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {flagged.length > 0 && (
+                    <div className="rounded-xl px-3 py-2.5" style={{ background: '#FFFBF0', border: `1px solid ${COLORS.gold}` }}>
+                      <p className="font-body text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>
+                        {flagged.length} transaction{flagged.length > 1 ? 's' : ''} need{flagged.length === 1 ? 's' : ''} your review
+                      </p>
+                      <p className="font-body text-xs mb-2" style={{ color: COLORS.inkSoft }}>
+                        Either your bank says these are gone, or they look like duplicates from reconnecting an account.
+                      </p>
+                      <button
+                        onClick={() => { setSyncPopup(null); setShowReviewModal(true); }}
+                        className="font-body text-xs font-semibold"
+                        style={{ color: COLORS.violet }}
+                      >
+                        Review now &rarr;
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </Card>
+          </div>
+        );
+      })()}
+
+      {showReviewModal && (
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+          <Card style={{ maxWidth: 560, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Review flagged transactions</h3>
+              <button onClick={() => setShowReviewModal(false)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+            </div>
+            {pendingReview.length === 0 ? (
+              <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Nothing to review right now.</p>
+            ) : (
+              <>
+                <div className="space-y-2 mb-4 max-h-96 overflow-y-auto">
+                  {pendingReview.map((t) => (
+                    <div key={t.id} className="rounded-xl px-3 py-2.5" style={{ background: COLORS.bg }}>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="min-w-0">
+                          <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                          <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                            {t.date} &middot; {t.pendingRemovalReason === 'duplicate' ? 'Possible duplicate' : "Bank says this is gone"}
+                          </p>
+                        </div>
+                        <span className="font-display font-semibold text-sm flex-shrink-0" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                          {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => keepTransaction(t.id)}
+                          className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-semibold font-body"
+                          style={{ background: `${COLORS.teal}22`, color: COLORS.teal }}
+                        >
+                          <Check size={12} /> Keep
+                        </button>
+                        <button
+                          onClick={() => deleteTransaction(t.id)}
+                          className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-semibold font-body"
+                          style={{ background: '#FFE9E9', color: COLORS.coral }}
+                        >
+                          <Trash2 size={12} /> Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-between items-center">
+                  <button onClick={deleteAllPending} className="font-body text-xs font-semibold" style={{ color: COLORS.coral }}>
+                    Delete all
+                  </button>
+                  <GhostButton onClick={keepAllPending}>
+                    <Check size={14} /> Keep all
+                  </GhostButton>
+                </div>
+              </>
+            )}
+          </Card>
+        </div>
       )}
     </div>
   );
@@ -3226,7 +3407,7 @@ export default function App() {
               <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} />
             )}
             {tab === 'accounts' && (
-              <AccountsView accounts={accounts} />
+              <AccountsView accounts={accounts} transactions={transactions} updateTransactions={updateTransactions} />
             )}
             {tab === 'budgets' && (
               <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} />
