@@ -436,11 +436,12 @@ function JarBar({ pct, height = 14 }) {
   );
 }
 
-function Card({ children, style, className = '' }) {
+function Card({ children, style, className = '', onClick }) {
   return (
     <div
-      className={`rounded-2xl p-5 ${className}`}
+      className={`rounded-2xl p-5 ${className} ${onClick ? 'cursor-pointer transition-transform hover:-translate-y-0.5' : ''}`}
       style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, boxShadow: '0 2px 10px rgba(124,92,252,0.06)', ...style }}
+      onClick={onClick}
     >
       {children}
     </div>
@@ -639,7 +640,7 @@ function MonthNav({ month, setMonth }) {
 
 /* ---------------------------------- Dashboard ---------------------------------- */
 
-function DashboardView({ transactions, budgets, bills, goals, month, setMonth, setTab, accounts }) {
+function DashboardView({ transactions, budgets, bills, goals, month, setMonth, setTab, accounts, goToLedger }) {
   const categoryColors = React.useContext(CategoryColorContext);
   const [hiddenChartCats, setHiddenChartCats] = useState([]);
   const [showChartFilter, setShowChartFilter] = useState(false);
@@ -700,35 +701,45 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <Card>
+        <Card onClick={() => goToLedger('income', 'All')}>
           <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.teal }}>
             <TrendingUp size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Income</span>
           </div>
           <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(income)}</p>
         </Card>
-        <Card>
+        <Card onClick={() => goToLedger('expense', 'All')}>
           <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.coral }}>
             <TrendingDown size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Expenses</span>
           </div>
           <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(expense)}</p>
           <div className="flex items-center gap-3 mt-1.5 pt-1.5" style={{ borderTop: `1px solid ${COLORS.border}` }}>
-            <div className="flex items-center gap-1" style={{ color: COLORS.inkSoft }}>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); goToLedger('expense', 'bank'); }}
+              className="flex items-center gap-1 hover:underline"
+              style={{ color: COLORS.inkSoft }}
+            >
               <Landmark size={11} />
               <span className="font-body text-xs">{formatCurrency(billsExpense)}</span>
-            </div>
-            <div className="flex items-center gap-1" style={{ color: COLORS.inkSoft }}>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); goToLedger('expense', 'card'); }}
+              className="flex items-center gap-1 hover:underline"
+              style={{ color: COLORS.inkSoft }}
+            >
               <CreditCard size={11} />
               <span className="font-body text-xs">{formatCurrency(cardExpense)}</span>
-            </div>
+            </button>
           </div>
         </Card>
-        <Card>
+        <Card onClick={() => goToLedger('All', 'All')}>
           <div className="flex items-center gap-2 mb-1" style={{ color: net >= 0 ? COLORS.violet : COLORS.coral }}>
             <Wallet size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Net</span>
           </div>
           <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(net)}</p>
         </Card>
-        <Card>
+        <Card onClick={() => setTab('savings')}>
           <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.gold }}>
             <PiggyBank size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Total saved</span>
           </div>
@@ -742,7 +753,7 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
             </div>
           )}
         </Card>
-        <Card>
+        <Card onClick={() => setTab('budgets')}>
           <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.violet }}>
             <Target size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Planned budget</span>
           </div>
@@ -908,9 +919,8 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
 
 /* ---------------------------------- Ledger ---------------------------------- */
 
-function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts }) {
+function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts, catFilter, setCatFilter, sourceFilter, setSourceFilter, typeFilter, setTypeFilter, lastSyncAt }) {
   const [search, setSearch] = useState('');
-  const [catFilter, setCatFilter] = useState('All');
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -924,7 +934,6 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
   const [newBucketName, setNewBucketName] = useState('');
   const [allocateDirection, setAllocateDirection] = useState('deposit');
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-  const [sourceFilter, setSourceFilter] = useState('All');
 
   const accountsById = useMemo(() => Object.fromEntries((accounts || []).map((a) => [a.id, a])), [accounts]);
 
@@ -1039,9 +1048,10 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
       .filter((t) => t.date.startsWith(month))
       .filter((t) => catFilter === 'All' || t.category === catFilter || (t.splits && t.splits.some((s) => s.category === catFilter)))
       .filter((t) => sourceFilter === 'All' || paymentSourceFor(t, accountsById) === sourceFilter)
+      .filter((t) => typeFilter === 'All' || t.type === typeFilter)
       .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [transactions, month, catFilter, sourceFilter, accountsById, search]);
+  }, [transactions, month, catFilter, sourceFilter, typeFilter, accountsById, search]);
 
   function addTransaction() {
     if (!form.description.trim() || !form.amount) return;
@@ -1403,6 +1413,11 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
           <option value="bank">Bank (bills)</option>
           <option value="card">Credit card</option>
         </Select>
+        <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ width: 140 }}>
+          <option value="All">Income + Expense</option>
+          <option value="income">Income only</option>
+          <option value="expense">Expense only</option>
+        </Select>
         <GhostButton onClick={() => setShowCategoryManager(true)}><Settings2 size={15} /> Categories</GhostButton>
         <GhostButton onClick={() => setShowImport(true)}><Upload size={15} /> Import CSV</GhostButton>
         {orphanedTransactions.length > 0 && (
@@ -1532,7 +1547,7 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                       <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.date}</td>
                       <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>
                         {t.description}
-                        {t.addedAt && Date.now() - t.addedAt < 24 * 60 * 60 * 1000 && (
+                        {t.addedAt && lastSyncAt && t.addedAt === lastSyncAt && (
                           <span
                             className="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-bold font-body ml-1.5"
                             style={{ background: COLORS.teal, color: '#fff' }}
@@ -3038,9 +3053,9 @@ function AccountsView({ accounts, transactions, updateTransactions }) {
       )}
 
       {syncPopup && (() => {
-        const cutoff = syncPopup.startedAt - 2 * 60 * 1000; // small buffer for clock skew
+        const syncTs = syncPopup.summary?.syncTimestamp;
         const newTx = transactions
-          .filter((t) => t.addedAt && t.addedAt >= cutoff && !t.pendingRemoval)
+          .filter((t) => t.addedAt && syncTs && t.addedAt === syncTs && !t.pendingRemoval)
           .sort((a, b) => b.date.localeCompare(a.date));
         const flagged = transactions.filter((t) => t.pendingRemoval);
         return (
@@ -3181,6 +3196,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('dashboard');
   const [month, setMonth] = useState(currentMonthStr());
+  const [ledgerCatFilter, setLedgerCatFilter] = useState('All');
+  const [ledgerSourceFilter, setLedgerSourceFilter] = useState('All');
+  const [ledgerTypeFilter, setLedgerTypeFilter] = useState('All');
   const [transactions, setTransactions] = useState([]);
   const [budgets, setBudgets] = useState({});
   const [goals, setGoals] = useState([]);
@@ -3189,6 +3207,7 @@ export default function App() {
   const [hiddenCategories, setHiddenCategories] = useState([]);
   const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
   const [accounts, setAccounts] = useState([]);
+  const [lastSyncAt, setLastSyncAt] = useState(null);
   const [notes, setNotes] = useState('');
 
   // Track sign-in state.
@@ -3236,6 +3255,7 @@ export default function App() {
       setHiddenCategories(d?.hiddenCategories || []);
       setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
       setAccounts(d?.accounts || []);
+      setLastSyncAt(d?.lastSyncAt || null);
       setNotes(d?.notes || '');
       setInviteCode(d?.inviteCode || '');
       setLoading(false);
@@ -3308,6 +3328,13 @@ export default function App() {
   function updateHiddenCategories(next) { setHiddenCategories(next); syncField('hiddenCategories', next); }
   function updateCategoryMemory(next) { setCategoryMemory(next); syncField('categoryMemory', next); }
   function updateNotes(next) { setNotes(next); syncField('notes', next); }
+
+  function goToLedger(type, source) {
+    setLedgerTypeFilter(type || 'All');
+    setLedgerSourceFilter(source || 'All');
+    setLedgerCatFilter('All');
+    setTab('ledger');
+  }
 
   if (authLoading) {
     return (
@@ -3401,10 +3428,10 @@ export default function App() {
         ) : (
           <>
             {tab === 'dashboard' && (
-              <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} />
+              <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} />
             )}
             {tab === 'ledger' && (
-              <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} />
+              <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} catFilter={ledgerCatFilter} setCatFilter={setLedgerCatFilter} sourceFilter={ledgerSourceFilter} setSourceFilter={setLedgerSourceFilter} typeFilter={ledgerTypeFilter} setTypeFilter={setLedgerTypeFilter} lastSyncAt={lastSyncAt} />
             )}
             {tab === 'accounts' && (
               <AccountsView accounts={accounts} transactions={transactions} updateTransactions={updateTransactions} />
