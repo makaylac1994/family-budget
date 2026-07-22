@@ -941,15 +941,29 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
   }
 
   const connectedAccountIds = useMemo(() => new Set((accounts || []).map((a) => a.id)), [accounts]);
-  const orphanedPlaidCount = useMemo(
-    () => transactions.filter((t) => t.plaidAccountId && !connectedAccountIds.has(t.plaidAccountId)).length,
+  const orphanedTransactions = useMemo(
+    () => transactions
+      .filter((t) => t.plaidAccountId && !connectedAccountIds.has(t.plaidAccountId))
+      .sort((a, b) => b.date.localeCompare(a.date)),
     [transactions, connectedAccountIds]
   );
+  const [showOrphanReview, setShowOrphanReview] = useState(false);
+  const [orphanSelected, setOrphanSelected] = useState(() => new Set());
 
-  function removeOrphanedPlaidTransactions() {
-    if (!orphanedPlaidCount) return;
-    if (!window.confirm(`Remove ${orphanedPlaidCount} transaction(s) left over from a disconnected bank (like the sandbox test bank)? This can't be undone.`)) return;
-    updateTransactions(transactions.filter((t) => !(t.plaidAccountId && !connectedAccountIds.has(t.plaidAccountId))));
+  function toggleOrphanSelected(id) {
+    setOrphanSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function deleteSelectedOrphans() {
+    if (orphanSelected.size === 0) return;
+    if (!window.confirm(`Permanently delete ${orphanSelected.size} transaction(s)? This can't be undone.`)) return;
+    updateTransactions(transactions.filter((t) => !orphanSelected.has(t.id)));
+    setOrphanSelected(new Set());
+    setShowOrphanReview(false);
   }
 
   function toggleSelected(id) {
@@ -1391,9 +1405,9 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
         </Select>
         <GhostButton onClick={() => setShowCategoryManager(true)}><Settings2 size={15} /> Categories</GhostButton>
         <GhostButton onClick={() => setShowImport(true)}><Upload size={15} /> Import CSV</GhostButton>
-        {orphanedPlaidCount > 0 && (
-          <GhostButton onClick={removeOrphanedPlaidTransactions} style={{ color: COLORS.coral, background: '#FFE9E9' }}>
-            <Trash2 size={15} /> Clean up {orphanedPlaidCount} leftover
+        {orphanedTransactions.length > 0 && (
+          <GhostButton onClick={() => setShowOrphanReview(true)} style={{ color: COLORS.coral, background: '#FFE9E9' }}>
+            <Trash2 size={15} /> Review {orphanedTransactions.length} leftover
           </GhostButton>
         )}
         <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> Add entry</PrimaryButton>
@@ -1917,6 +1931,86 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
               <PrimaryButton onClick={confirmAllocate} disabled={allocateOverBudget}>
                 <Check size={15} /> Save allocation
               </PrimaryButton>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {showOrphanReview && (
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+          <Card style={{ maxWidth: 560, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Review leftover transactions</h3>
+              <button onClick={() => setShowOrphanReview(false)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+            </div>
+            <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+              These are tied to a bank account that's no longer connected. That's expected for an old sandbox test bank &mdash; but if you disconnected and reconnected a <em>real</em> bank, these could be genuine history (paychecks, mortgage payments, etc.) that Plaid's new connection hasn't re-supplied yet. Nothing is deleted until you select transactions below and confirm.
+            </p>
+            <div className="rounded-xl border mb-3" style={{ borderColor: COLORS.border, maxHeight: 320, overflowY: 'auto' }}>
+              <table className="w-full text-xs font-body">
+                <thead>
+                  <tr className="text-left border-b" style={{ borderColor: COLORS.border, color: COLORS.inkSoft }}>
+                    <th className="pl-3 pr-1 py-2" style={{ width: 24 }}>
+                      <div
+                        onClick={() => {
+                          const allIds = orphanedTransactions.map((t) => t.id);
+                          const allSelected = allIds.every((id) => orphanSelected.has(id));
+                          setOrphanSelected(allSelected ? new Set() : new Set(allIds));
+                        }}
+                        className="flex items-center justify-center cursor-pointer"
+                        style={{
+                          width: 13, height: 13, borderRadius: 3,
+                          border: `1.5px solid ${orphanedTransactions.length > 0 && orphanedTransactions.every((t) => orphanSelected.has(t.id)) ? COLORS.violet : COLORS.border}`,
+                          background: orphanedTransactions.length > 0 && orphanedTransactions.every((t) => orphanSelected.has(t.id)) ? COLORS.violet : 'transparent',
+                        }}
+                      >
+                        {orphanedTransactions.length > 0 && orphanedTransactions.every((t) => orphanSelected.has(t.id)) && <Check size={9} style={{ color: '#fff' }} strokeWidth={3} />}
+                      </div>
+                    </th>
+                    <th className="px-2 py-2">Date</th>
+                    <th className="px-2 py-2">Description</th>
+                    <th className="px-2 py-2 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orphanedTransactions.map((t) => (
+                    <tr key={t.id} className="border-b last:border-0" style={{ borderColor: COLORS.border }}>
+                      <td className="pl-3 pr-1 py-1.5">
+                        <div
+                          onClick={() => toggleOrphanSelected(t.id)}
+                          className="flex items-center justify-center cursor-pointer"
+                          style={{
+                            width: 13, height: 13, borderRadius: 3,
+                            border: `1.5px solid ${orphanSelected.has(t.id) ? COLORS.violet : COLORS.border}`,
+                            background: orphanSelected.has(t.id) ? COLORS.violet : 'transparent',
+                          }}
+                        >
+                          {orphanSelected.has(t.id) && <Check size={9} style={{ color: '#fff' }} strokeWidth={3} />}
+                        </div>
+                      </td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{t.date}</td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{t.description}</td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                        {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{orphanSelected.size} selected</span>
+              <div className="flex gap-2">
+                <GhostButton onClick={() => setShowOrphanReview(false)}>Close</GhostButton>
+                <button
+                  onClick={deleteSelectedOrphans}
+                  disabled={orphanSelected.size === 0}
+                  className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold font-body text-white disabled:opacity-50"
+                  style={{ background: COLORS.coral }}
+                >
+                  <Trash2 size={15} /> Delete selected
+                </button>
+              </div>
             </div>
           </Card>
         </div>
@@ -2739,8 +2833,8 @@ function ConnectBankButton({ onConnected }) {
     onSuccess: async (publicToken, metadata) => {
       try {
         const exchangePublicToken = httpsCallable(functions, 'exchangePublicToken');
-        await exchangePublicToken({ publicToken, institutionName: metadata?.institution?.name });
-        onConnected();
+        const resp = await exchangePublicToken({ publicToken, institutionName: metadata?.institution?.name });
+        onConnected(resp.data);
       } catch (e) {
         setError(e.message);
       } finally {
@@ -2772,18 +2866,30 @@ function AccountsView({ accounts }) {
   const [syncing, setSyncing] = useState(false);
   const [disconnectingId, setDisconnectingId] = useState(null);
   const [error, setError] = useState('');
+  const [lastSync, setLastSync] = useState(null);
 
   async function handleSync() {
     setSyncing(true);
     setError('');
     try {
       const syncHousehold = httpsCallable(functions, 'syncHousehold');
-      await syncHousehold();
+      const resp = await syncHousehold();
+      setLastSync(resp.data);
     } catch (e) {
       setError(e.message);
     } finally {
       setSyncing(false);
     }
+  }
+
+  function summaryText(s) {
+    if (!s) return null;
+    const parts = [];
+    if (s.added) parts.push(`${s.added} new`);
+    if (s.modified) parts.push(`${s.modified} updated`);
+    if (s.removed) parts.push(`${s.removed} removed by bank`);
+    if (s.deduped) parts.push(`${s.deduped} duplicate${s.deduped > 1 ? 's' : ''} skipped`);
+    return parts.length ? parts.join(', ') : 'No changes';
   }
 
   async function handleDisconnect(itemId, institutionName) {
@@ -2821,11 +2927,14 @@ function AccountsView({ accounts }) {
               <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing...' : 'Sync now'}
             </GhostButton>
           )}
-          <ConnectBankButton onConnected={handleSync} />
+          <ConnectBankButton onConnected={setLastSync} />
         </div>
       </div>
 
       {error && <p className="font-body text-xs" style={{ color: COLORS.coral }}>{error}</p>}
+      {!error && lastSync && (
+        <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Last sync: {summaryText(lastSync)}</p>
+      )}
 
       {accounts.length === 0 ? (
         <Card><EmptyState icon={Landmark} title="No banks connected yet" subtitle="Click Connect a bank above to securely link a checking, savings, or credit account via Plaid." /></Card>
