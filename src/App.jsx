@@ -3083,7 +3083,7 @@ function NotesSection({ notes, updateNotes }) {
   );
 }
 
-function CategoriesSection({ budgets, transactions, goals, hiddenCategories, updateHiddenCategories, renameCategory }) {
+function CategoriesSection({ budgets, transactions, goals, hiddenCategories, updateHiddenCategories, renameCategory, categoryColors, updateCategoryColors }) {
   const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
   const budgetCategorySet = useMemo(() => new Set(Object.keys(budgets)), [budgets]);
   const allCategories = useMemo(() => {
@@ -3098,6 +3098,7 @@ function CategoriesSection({ budgets, transactions, goals, hiddenCategories, upd
 
   const [editingCat, setEditingCat] = useState(null);
   const [editValue, setEditValue] = useState('');
+  const [colorPickerOpen, setColorPickerOpen] = useState({});
 
   function hideCategory(cat) {
     if (!hiddenCategories.includes(cat)) updateHiddenCategories([...hiddenCategories, cat]);
@@ -3119,6 +3120,14 @@ function CategoriesSection({ budgets, transactions, goals, hiddenCategories, upd
     setEditingCat(null);
   }
 
+  function toggleColorPicker(cat) {
+    setColorPickerOpen((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  }
+
+  function setCategoryColor(cat, color) {
+    updateCategoryColors({ ...categoryColors, [cat]: color });
+  }
+
   return (
     <Card>
       <h3 className="font-display font-semibold mb-2" style={{ color: COLORS.ink }}>Categories</h3>
@@ -3130,35 +3139,50 @@ function CategoriesSection({ budgets, transactions, goals, hiddenCategories, upd
           <p className="font-body text-xs font-semibold mb-1.5" style={{ color: COLORS.inkSoft }}>In use</p>
           <div className="space-y-1.5">
             {visibleCategories.filter((c) => c !== 'Income').map((cat) => (
-              <div key={cat} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
-                {editingCat === cat ? (
-                  <div className="flex items-center gap-1 flex-1 mr-2">
-                    <TextInput
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') setEditingCat(null); }}
-                      autoFocus
-                      style={{ padding: '4px 8px', fontSize: 12 }}
-                    />
-                    <button onClick={confirmRename} style={{ color: COLORS.teal }}><Check size={15} /></button>
-                    <button onClick={() => setEditingCat(null)} style={{ color: COLORS.inkSoft }}><X size={15} /></button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5">
-                    <CategoryBadge cat={cat} />
-                    {!budgetCategorySet.has(cat) && (
-                      <span className="font-body text-xs" style={{ color: COLORS.inkSoft }} title="Not in your budget — added automatically">Auto</span>
-                    )}
-                  </div>
-                )}
-                {editingCat !== cat && (
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => startEditing(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-violet-600" title="Rename">
-                      <Settings2 size={13} />
-                    </button>
-                    <button onClick={() => hideCategory(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Hide from dropdowns">
-                      <Trash2 size={14} />
-                    </button>
+              <div key={cat}>
+                <div className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                  {editingCat === cat ? (
+                    <div className="flex items-center gap-1 flex-1 mr-2">
+                      <TextInput
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') setEditingCat(null); }}
+                        autoFocus
+                        style={{ padding: '4px 8px', fontSize: 12 }}
+                      />
+                      <button onClick={confirmRename} style={{ color: COLORS.teal }}><Check size={15} /></button>
+                      <button onClick={() => setEditingCat(null)} style={{ color: COLORS.inkSoft }}><X size={15} /></button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <CategoryBadge cat={cat} />
+                      {!budgetCategorySet.has(cat) && (
+                        <span className="font-body text-xs" style={{ color: COLORS.inkSoft }} title="Not in your budget — added automatically">Auto</span>
+                      )}
+                    </div>
+                  )}
+                  {editingCat !== cat && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => toggleColorPicker(cat)}
+                        style={{ color: colorPickerOpen[cat] ? COLORS.violet : COLORS.inkSoft }}
+                        className="hover:text-violet-600"
+                        title="Change color"
+                      >
+                        <Palette size={13} />
+                      </button>
+                      <button onClick={() => startEditing(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-violet-600" title="Rename">
+                        <Settings2 size={13} />
+                      </button>
+                      <button onClick={() => hideCategory(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Hide from dropdowns">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {colorPickerOpen[cat] && (
+                  <div className="px-3 py-2">
+                    <CategoryColorPicker current={categoryColor(cat, categoryColors)} onChange={(c) => setCategoryColor(cat, c)} />
                   </div>
                 )}
               </div>
@@ -3213,7 +3237,7 @@ function AnnualAccountSection({ accounts, annualAccountId, updateAnnualAccountId
   );
 }
 
-function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory }) {
+function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory, categoryColors, updateCategoryColors }) {
   return (
     <div className="space-y-5">
       <div>
@@ -3222,7 +3246,7 @@ function SettingsView({ bills, updateBills, month, budgets, transactions, goals,
       </div>
 
       <NotesSection notes={notes} updateNotes={updateNotes} />
-      <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} renameCategory={renameCategory} />
+      <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
       <AnnualAccountSection accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} />
       <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />
     </div>
@@ -3892,7 +3916,7 @@ export default function App() {
               <AnnualView accounts={accounts} goals={goals} updateGoals={updateGoals} setTab={setTab} goToLedgerBucket={goToLedgerBucket} annualAccountId={annualAccountId} />
             )}
             {tab === 'settings' && (
-              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} />
+              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
             )}
           </>
         )}
