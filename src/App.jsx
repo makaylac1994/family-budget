@@ -936,7 +936,10 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
   const [selectedIds, setSelectedIds] = useState(() => new Set());
 
   const accountsById = useMemo(() => Object.fromEntries((accounts || []).map((a) => [a.id, a])), [accounts]);
-
+  const savingsAccountsList = useMemo(
+    () => (accounts || []).filter((a) => ['savings', 'money market', 'cd', 'hsa'].includes((a.subtype || '').toLowerCase())),
+    [accounts]
+  );
   function togglePaymentSource(id) {
     const tx = transactions.find((t) => t.id === id);
     if (!tx) return;
@@ -1267,9 +1270,8 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
 
   function openAllocateModal(t) {
     setAllocateTarget(t);
-    setAllocateRows(
-      (t.savingsAllocations || []).map((a) => ({ id: uid(), bucketId: a.bucketId, amount: String(a.amount) }))
-    );
+    const existing = (t.savingsAllocations || []).map((a) => ({ id: uid(), bucketId: a.bucketId, amount: String(a.amount) }));
+    setAllocateRows(existing.length ? existing : (goals.length ? [{ id: uid(), bucketId: goals[0].id, amount: String(t.amount) }] : []));
     setAllocateDirection(allocationDirection(t));
     setNewBucketName('');
   }
@@ -1643,7 +1645,7 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                             Split &middot; {t.splits.length}
                           </button>
                         ) : (
-                          <CategoryEditCell value={t.category} options={categoryOptionsFor(t.category)} bucketOptions={bucketCategoryNames} onChange={(cat) => updateCategoryOrAllocate(t.id, cat)} />
+                          <CategoryEditCell value={t.category} options={categoryOptionsFor(t.category)} onChange={(cat) => updateCategoryOrAllocate(t.id, cat)} />
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-right">
@@ -1665,7 +1667,7 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                       </td>
                       <td className="px-4 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-2.5">
-                          <button onClick={() => openAllocateModal(t)} style={{ color: t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : COLORS.inkSoft }} className="hover:text-teal-600" title="Allocate to savings">
+                          <button onClick={() => openAllocateModal(t)} style={{ color: t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : COLORS.inkSoft }} className="hover:text-teal-600" title="Choose bucket / allocate to savings">
                             <PiggyBank size={15} />
                           </button>
                           <button onClick={() => openSplitModal(t)} style={{ color: COLORS.inkSoft }} className="hover:text-violet-600" title="Split transaction">
@@ -1683,7 +1685,7 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                         <td className="px-4 py-2"></td>
                         <td className="px-4 py-2 pl-8 text-xs" style={{ color: COLORS.inkSoft }}>&#8618; portion</td>
                         <td className="px-4 py-2">
-                          <CategoryEditCell value={s.category} options={categoryOptionsFor(s.category)} bucketOptions={bucketCategoryNames} onChange={(cat) => updateSplitCategory(t.id, s.id, cat)} />
+                          <CategoryEditCell value={s.category} options={categoryOptionsFor(s.category)} onChange={(cat) => updateSplitCategory(t.id, s.id, cat)} />
                         </td>
                         <td className="px-4 py-2 text-right font-semibold text-sm" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
                           {t.type === 'income' ? '+' : '-'}{formatCurrency(s.amount)}
@@ -1874,7 +1876,7 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
         <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
           <Card style={{ maxWidth: 460, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Allocate to savings</h3>
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Choose bucket</h3>
               <button onClick={() => setAllocateTarget(null)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
             </div>
 
@@ -1919,7 +1921,25 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                 {allocateRows.map((row) => (
                   <div key={row.id} className="flex items-center gap-2">
                     <Select value={row.bucketId} onChange={(e) => updateAllocateRow(row.id, 'bucketId', e.target.value)} style={{ flex: 1 }}>
-                      {goals.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                      {savingsAccountsList.map((a) => {
+                        const acctGoals = goals.filter((g) => g.accountId === a.id);
+                        if (!acctGoals.length) return null;
+                        return (
+                          <optgroup key={a.id} label={`${a.name}${a.mask ? ` ••${a.mask}` : ''}`}>
+                            {acctGoals.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                          </optgroup>
+                        );
+                      })}
+                      {(() => {
+                        const linkedIds = new Set(savingsAccountsList.map((a) => a.id));
+                        const unlinked = goals.filter((g) => !g.accountId || !linkedIds.has(g.accountId));
+                        if (!unlinked.length) return null;
+                        return (
+                          <optgroup label="Not linked to an account">
+                            {unlinked.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                          </optgroup>
+                        );
+                      })()}
                     </Select>
                     <TextInput
                       type="number" min="0" step="0.01" placeholder="0.00"
