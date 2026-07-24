@@ -10,7 +10,7 @@ import { usePlaidLink } from 'react-plaid-link';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import {
   Wallet, Receipt, PiggyBank, Target, CalendarClock, Upload, Plus, Trash2,
-  Search, ChevronLeft, ChevronRight, ChevronDown, TrendingUp, TrendingDown, X, Check,
+  Search, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, TrendingUp, TrendingDown, X, Check,
   Loader2, Sparkles, Flame, Scissors, Palette, Settings2, Coins, Landmark, RefreshCw,
   CreditCard, Repeat,
 } from 'lucide-react';
@@ -925,6 +925,11 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
 
 function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts, catFilter, setCatFilter, sourceFilter, setSourceFilter, typeFilter, setTypeFilter, lastSyncAt, bucketFilter, setBucketFilter }) {
   const [search, setSearch] = useState('');
+  const [amountMin, setAmountMin] = useState('');
+  const [amountMax, setAmountMax] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -1063,6 +1068,8 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
 
   const [form, setForm] = useState({ date: todayStr(), description: '', category: 'Groceries', amount: '', type: 'expense' });
 
+  const hasCustomDateRange = !!(dateFrom || dateTo);
+
   const filtered = useMemo(() => {
     if (bucketFilter) {
       return transactions
@@ -1071,13 +1078,17 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
         .sort((a, b) => b.date.localeCompare(a.date));
     }
     return transactions
-      .filter((t) => t.date.startsWith(month))
+      .filter((t) => (hasCustomDateRange
+        ? (!dateFrom || t.date >= dateFrom) && (!dateTo || t.date <= dateTo)
+        : t.date.startsWith(month)))
       .filter((t) => catFilter === 'All' || t.category === catFilter || (t.splits && t.splits.some((s) => s.category === catFilter)))
       .filter((t) => sourceFilter === 'All' || paymentSourceFor(t, accountsById) === sourceFilter)
       .filter((t) => typeFilter === 'All' || t.type === typeFilter)
+      .filter((t) => !amountMin || t.amount >= parseFloat(amountMin))
+      .filter((t) => !amountMax || t.amount <= parseFloat(amountMax))
       .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [transactions, month, catFilter, sourceFilter, typeFilter, bucketFilter, accountsById, search]);
+  }, [transactions, month, catFilter, sourceFilter, typeFilter, bucketFilter, accountsById, search, dateFrom, dateTo, hasCustomDateRange, amountMin, amountMax]);
 
   function addTransaction() {
     if (!form.description.trim() || !form.amount) return;
@@ -1424,6 +1435,14 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
           >
             <PiggyBank size={14} /> {goals.find((g) => g.id === bucketFilter)?.name || 'Bucket'} <X size={13} />
           </button>
+        ) : hasCustomDateRange ? (
+          <button
+            onClick={() => { setDateFrom(''); setDateTo(''); }}
+            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold font-body"
+            style={{ background: COLORS.violetSoft, color: COLORS.violet }}
+          >
+            {dateFrom || '\u2026'} &rarr; {dateTo || '\u2026'} <X size={13} />
+          </button>
         ) : (
           <MonthNav month={month} setMonth={setMonth} />
         )}
@@ -1455,6 +1474,9 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
           <option value="income">Income only</option>
           <option value="expense">Expense only</option>
         </Select>
+        <GhostButton onClick={() => setShowMoreFilters((v) => !v)}>
+          {showMoreFilters ? <ChevronUp size={15} /> : <ChevronDown size={15} />} Amount &amp; date
+        </GhostButton>
         <GhostButton onClick={() => setShowCategoryManager(true)}><Settings2 size={15} /> Categories</GhostButton>
         <GhostButton onClick={() => setShowImport(true)}><Upload size={15} /> Import CSV</GhostButton>
         {orphanedTransactions.length > 0 && (
@@ -1464,6 +1486,43 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
         )}
         <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> Add entry</PrimaryButton>
       </div>
+
+      {showMoreFilters && (
+        <Card>
+          <div className="grid sm:grid-cols-4 gap-3 items-end">
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Min amount</label>
+              <TextInput type="number" min="0" step="0.01" placeholder="$0.00" value={amountMin} onChange={(e) => setAmountMin(e.target.value)} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Max amount</label>
+              <TextInput type="number" min="0" step="0.01" placeholder="No max" value={amountMax} onChange={(e) => setAmountMax(e.target.value)} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>From date</label>
+              <TextInput type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>To date</label>
+              <TextInput type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            </div>
+          </div>
+          <p className="font-body text-xs mt-2" style={{ color: COLORS.inkSoft }}>
+            {hasCustomDateRange
+              ? 'A date range is set, so it replaces the month selector above until cleared.'
+              : 'Description is filtered by the search box up top; these narrow by amount and date on top of that.'}
+          </p>
+          {(amountMin || amountMax || dateFrom || dateTo) && (
+            <button
+              onClick={() => { setAmountMin(''); setAmountMax(''); setDateFrom(''); setDateTo(''); }}
+              className="font-body text-xs font-semibold mt-2"
+              style={{ color: COLORS.coral }}
+            >
+              Clear these filters
+            </button>
+          )}
+        </Card>
+      )}
 
       {selectedIds.size > 0 && (
         <div className="flex items-center justify-between rounded-xl px-4 py-2.5" style={{ background: COLORS.violetSoft }}>
@@ -3024,8 +3083,9 @@ function NotesSection({ notes, updateNotes }) {
   );
 }
 
-function CategoriesSection({ budgets, transactions, goals, hiddenCategories, updateHiddenCategories }) {
+function CategoriesSection({ budgets, transactions, goals, hiddenCategories, updateHiddenCategories, renameCategory }) {
   const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
+  const budgetCategorySet = useMemo(() => new Set(Object.keys(budgets)), [budgets]);
   const allCategories = useMemo(() => {
     const set = new Set([...DEFAULT_EXPENSE_CATEGORIES, ...Object.keys(budgets), 'Income']);
     transactions.forEach((t) => { if (!bucketNameSet.has(t.category)) set.add(t.category); });
@@ -3036,6 +3096,9 @@ function CategoriesSection({ budgets, transactions, goals, hiddenCategories, upd
     [allCategories, hiddenCategories]
   );
 
+  const [editingCat, setEditingCat] = useState(null);
+  const [editValue, setEditValue] = useState('');
+
   function hideCategory(cat) {
     if (!hiddenCategories.includes(cat)) updateHiddenCategories([...hiddenCategories, cat]);
   }
@@ -3043,11 +3106,24 @@ function CategoriesSection({ budgets, transactions, goals, hiddenCategories, upd
     updateHiddenCategories(hiddenCategories.filter((c) => c !== cat));
   }
 
+  function startEditing(cat) {
+    setEditingCat(cat);
+    setEditValue(cat);
+  }
+
+  function confirmRename() {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== editingCat) {
+      renameCategory(editingCat, trimmed);
+    }
+    setEditingCat(null);
+  }
+
   return (
     <Card>
       <h3 className="font-display font-semibold mb-2" style={{ color: COLORS.ink }}>Categories</h3>
       <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
-        Hide categories you don't use to declutter the dropdowns everywhere in the app. Nothing is deleted — existing transactions keep their category, and you can bring one back anytime.
+        Hide categories you don't use to declutter the dropdowns everywhere in the app. Click the pencil to rename one &mdash; useful for categories the app auto-added from Plaid that don't quite match how you think about them. Renaming updates every transaction, budget, and bill using that category.
       </p>
       <div className="grid sm:grid-cols-2 gap-4">
         <div>
@@ -3055,10 +3131,36 @@ function CategoriesSection({ budgets, transactions, goals, hiddenCategories, upd
           <div className="space-y-1.5">
             {visibleCategories.filter((c) => c !== 'Income').map((cat) => (
               <div key={cat} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
-                <CategoryBadge cat={cat} />
-                <button onClick={() => hideCategory(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Hide from dropdowns">
-                  <Trash2 size={14} />
-                </button>
+                {editingCat === cat ? (
+                  <div className="flex items-center gap-1 flex-1 mr-2">
+                    <TextInput
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') setEditingCat(null); }}
+                      autoFocus
+                      style={{ padding: '4px 8px', fontSize: 12 }}
+                    />
+                    <button onClick={confirmRename} style={{ color: COLORS.teal }}><Check size={15} /></button>
+                    <button onClick={() => setEditingCat(null)} style={{ color: COLORS.inkSoft }}><X size={15} /></button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <CategoryBadge cat={cat} />
+                    {!budgetCategorySet.has(cat) && (
+                      <span className="font-body text-xs" style={{ color: COLORS.inkSoft }} title="Not in your budget — added automatically">Auto</span>
+                    )}
+                  </div>
+                )}
+                {editingCat !== cat && (
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => startEditing(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-violet-600" title="Rename">
+                      <Settings2 size={13} />
+                    </button>
+                    <button onClick={() => hideCategory(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Hide from dropdowns">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
             {visibleCategories.filter((c) => c !== 'Income').length === 0 && (
@@ -3111,7 +3213,7 @@ function AnnualAccountSection({ accounts, annualAccountId, updateAnnualAccountId
   );
 }
 
-function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId }) {
+function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory }) {
   return (
     <div className="space-y-5">
       <div>
@@ -3120,7 +3222,7 @@ function SettingsView({ bills, updateBills, month, budgets, transactions, goals,
       </div>
 
       <NotesSection notes={notes} updateNotes={updateNotes} />
-      <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} />
+      <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} renameCategory={renameCategory} />
       <AnnualAccountSection accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} />
       <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />
     </div>
@@ -3622,6 +3724,48 @@ export default function App() {
   function updateNotes(next) { setNotes(next); syncField('notes', next); }
   function updateAnnualAccountId(next) { setAnnualAccountId(next); syncField('annualAccountId', next); }
 
+  function renameCategory(oldName, newName) {
+    if (!newName || newName === oldName) return;
+
+    const nextTransactions = transactions.map((t) => {
+      let next = t;
+      if (t.category === oldName) next = { ...next, category: newName };
+      if (t.splits && t.splits.some((s) => s.category === oldName)) {
+        next = { ...next, splits: t.splits.map((s) => (s.category === oldName ? { ...s, category: newName } : s)) };
+      }
+      return next;
+    });
+    updateTransactions(nextTransactions);
+
+    if (Object.prototype.hasOwnProperty.call(budgets, oldName)) {
+      const nextBudgets = { ...budgets };
+      nextBudgets[newName] = nextBudgets[oldName];
+      delete nextBudgets[oldName];
+      updateBudgets(nextBudgets);
+    }
+
+    if (categoryColors[oldName]) {
+      const nextColors = { ...categoryColors };
+      nextColors[newName] = nextColors[oldName];
+      delete nextColors[oldName];
+      updateCategoryColors(nextColors);
+    }
+
+    if (hiddenCategories.includes(oldName)) {
+      updateHiddenCategories(hiddenCategories.map((c) => (c === oldName ? newName : c)));
+    }
+
+    const nextExact = {};
+    Object.entries(categoryMemory.exact || {}).forEach(([k, v]) => { nextExact[k] = v === oldName ? newName : v; });
+    const nextMerchant = {};
+    Object.entries(categoryMemory.merchant || {}).forEach(([k, v]) => { nextMerchant[k] = v === oldName ? newName : v; });
+    updateCategoryMemory({ exact: nextExact, merchant: nextMerchant });
+
+    if (bills.some((b) => b.category === oldName)) {
+      updateBills(bills.map((b) => (b.category === oldName ? { ...b, category: newName } : b)));
+    }
+  }
+
   function goToLedger(type, source) {
     setLedgerTypeFilter(type || 'All');
     setLedgerSourceFilter(source || 'All');
@@ -3748,7 +3892,7 @@ export default function App() {
               <AnnualView accounts={accounts} goals={goals} updateGoals={updateGoals} setTab={setTab} goToLedgerBucket={goToLedgerBucket} annualAccountId={annualAccountId} />
             )}
             {tab === 'settings' && (
-              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} />
+              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} />
             )}
           </>
         )}
