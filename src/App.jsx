@@ -155,6 +155,21 @@ function nonBucketAmount(t, bucketNameSet) {
   return bucketNameSet.has(t.category) ? 0 : t.amount;
 }
 
+// How much a bucket needs saved per month to hit its target by its target
+// date, based on what's left and how much time remains from today. Returns 0
+// if there's no target/target date, or if the target's already been reached.
+function monthlySavingsNeeded(g) {
+  if (!g.target || g.target <= 0 || !g.targetDate) return 0;
+  const remaining = Math.max(0, g.target - (g.saved || 0));
+  if (remaining <= 0) return 0;
+  const today = new Date();
+  const due = new Date(`${g.targetDate}T00:00:00`);
+  const msRemaining = due - today;
+  if (msRemaining <= 0) return remaining;
+  const monthsRemaining = Math.max(1, Math.ceil(msRemaining / (1000 * 60 * 60 * 24 * 30.44)));
+  return remaining / monthsRemaining;
+}
+
 function detectHeaderMap(fields) {
   const map = {};
   fields.forEach((f) => {
@@ -2338,10 +2353,11 @@ function BudgetsView({ budgets, updateBudgets, transactions, month, setMonth, ca
 
 /* ---------------------------------- Goals ---------------------------------- */
 
-function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateSavedAmount, updateBucketName, removeBucket, onViewTransfers }) {
+function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateTargetDate, updateSavedAmount, updateBucketName, removeBucket, onViewTransfers }) {
   const hasTarget = g.target != null && g.target > 0;
   const pct = hasTarget ? (g.saved / g.target) * 100 : 0;
   const done = hasTarget && pct >= 100;
+  const monthlyNeeded = monthlySavingsNeeded(g);
 
   return (
     <Card>
@@ -2425,6 +2441,27 @@ function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDeposi
           <div className="mt-1.5">
             <JarBar pct={pct} height={10} />
           </div>
+          {!done && (
+            <div className="flex items-center gap-2 mt-2">
+              <TextInput
+                type="date"
+                value={g.targetDate || ''}
+                onChange={(e) => updateTargetDate(g.id, e.target.value)}
+                style={{ fontSize: 11, padding: '4px 8px', flex: 1 }}
+              />
+              {g.targetDate && (
+                <span
+                  className="font-body text-xs font-semibold whitespace-nowrap"
+                  style={{ color: monthlyNeeded > 0 ? COLORS.violet : COLORS.teal }}
+                >
+                  {formatCurrency(monthlyNeeded)}/mo
+                </span>
+              )}
+            </div>
+          )}
+          {!g.targetDate && !done && (
+            <p className="font-body text-xs mt-1" style={{ color: COLORS.inkSoft }}>Set a target date to see how much to save monthly.</p>
+          )}
         </div>
       ) : (
         <p className="font-body text-xs mt-1" style={{ color: COLORS.inkSoft }}>No target set</p>
@@ -2490,7 +2527,8 @@ function SavingsView({ goals, updateGoals, transactions, accounts, annualAccount
     const linkedGoals = visibleGoals.filter((g) => g.accountId === a.id);
     const allocated = linkedGoals.reduce((s, g) => s + (g.saved || 0), 0);
     const diff = Math.round(((Number(a.balance) || 0) - allocated) * 100) / 100;
-    return { account: a, allocated, diff, linkedGoals };
+    const monthlyNeeded = linkedGoals.reduce((s, g) => s + monthlySavingsNeeded(g), 0);
+    return { account: a, allocated, diff, linkedGoals, monthlyNeeded };
   }), [savingsAccounts, visibleGoals]);
 
   const unlinkedGoals = useMemo(
@@ -2535,6 +2573,10 @@ function SavingsView({ goals, updateGoals, transactions, accounts, annualAccount
   function updateTarget(id, val) {
     const t = parseFloat(val);
     updateGoals(goals.map((g) => g.id === id ? { ...g, target: t > 0 ? t : null } : g));
+  }
+
+  function updateTargetDate(id, val) {
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, targetDate: val || undefined } : g)));
   }
 
   function updateSavedAmount(id, val) {
@@ -2606,7 +2648,7 @@ function SavingsView({ goals, updateGoals, transactions, accounts, annualAccount
         <Card><EmptyState icon={Target} title="No savings buckets yet" subtitle="Create one for anything you're setting money aside for &mdash; an emergency fund, a trip, a house." /></Card>
       ) : (
         <div className="space-y-5">
-          {perAccountReconcile.map(({ account, allocated, diff, linkedGoals }) => {
+          {perAccountReconcile.map(({ account, allocated, diff, linkedGoals, monthlyNeeded }) => {
             const expanded = !collapsedAccounts.has(account.id);
             return (
               <div key={account.id}>
@@ -2625,6 +2667,7 @@ function SavingsView({ goals, updateGoals, transactions, accounts, annualAccount
                     </p>
                     <p className="font-body text-xs mt-0.5" style={{ color: COLORS.inkSoft }}>
                       Real balance {formatCurrency(account.balance)} &middot; linked {formatCurrency(allocated)}
+                      {monthlyNeeded > 0 && <> &middot; <span style={{ color: COLORS.violet, fontWeight: 600 }}>{formatCurrency(monthlyNeeded)}/mo to hit targets</span></>}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
@@ -2660,6 +2703,7 @@ function SavingsView({ goals, updateGoals, transactions, accounts, annualAccount
                             onAddFunds={() => addFunds(g.id)}
                             updateGoalAccount={updateGoalAccount}
                             updateTarget={updateTarget}
+                            updateTargetDate={updateTargetDate}
                             updateSavedAmount={updateSavedAmount}
                             updateBucketName={updateBucketName}
                             removeBucket={removeBucket}
@@ -2689,6 +2733,7 @@ function SavingsView({ goals, updateGoals, transactions, accounts, annualAccount
                     onAddFunds={() => addFunds(g.id)}
                     updateGoalAccount={updateGoalAccount}
                     updateTarget={updateTarget}
+                            updateTargetDate={updateTargetDate}
                     updateSavedAmount={updateSavedAmount}
                     updateBucketName={updateBucketName}
                     removeBucket={removeBucket}
@@ -2716,6 +2761,7 @@ function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBucket, an
   const bucketGoals = useMemo(() => goals.filter((g) => g.accountId === annualAccountId), [goals, annualAccountId]);
   const allocated = bucketGoals.reduce((s, g) => s + (g.saved || 0), 0);
   const diff = account ? Math.round(((Number(account.balance) || 0) - allocated) * 100) / 100 : 0;
+  const monthlyNeededTotal = bucketGoals.reduce((s, g) => s + monthlySavingsNeeded(g), 0);
   const perAccountReconcile = account ? [{ account, allocated, diff, linkedGoals: bucketGoals }] : [];
   const savingsAccountsList = account ? [account] : [];
 
@@ -2736,6 +2782,10 @@ function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBucket, an
   function updateTarget(id, val) {
     const t = parseFloat(val);
     updateGoals(goals.map((g) => g.id === id ? { ...g, target: t > 0 ? t : null } : g));
+  }
+
+  function updateTargetDate(id, val) {
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, targetDate: val || undefined } : g)));
   }
 
   function updateSavedAmount(id, val) {
@@ -2820,6 +2870,12 @@ function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBucket, an
             <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Allocated to buckets</p>
             <p className="font-display font-semibold" style={{ color: COLORS.ink }}>{formatCurrency(allocated)}</p>
           </div>
+          {monthlyNeededTotal > 0 && (
+            <div>
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>To hit targets</p>
+              <p className="font-display font-semibold" style={{ color: COLORS.violet }}>{formatCurrency(monthlyNeededTotal)}/mo</p>
+            </div>
+          )}
         </div>
         {diff === 0 ? (
           <span className="inline-flex items-center gap-1 font-body text-xs font-semibold rounded-full px-2.5 py-1" style={{ background: `${COLORS.teal}22`, color: COLORS.teal }}>
@@ -2864,6 +2920,7 @@ function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBucket, an
               onAddFunds={() => addFunds(g.id)}
               updateGoalAccount={updateGoalAccount}
               updateTarget={updateTarget}
+                            updateTargetDate={updateTargetDate}
               updateSavedAmount={updateSavedAmount}
               updateBucketName={updateBucketName}
               removeBucket={removeBucket}
