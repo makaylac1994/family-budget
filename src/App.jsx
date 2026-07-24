@@ -1105,6 +1105,21 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [transactions, month, catFilter, sourceFilter, typeFilter, bucketFilter, accountsById, search, dateFrom, dateTo, hasCustomDateRange, amountMin, amountMax]);
 
+  const filteredSummary = useMemo(() => {
+    let countedIncome = 0, countedExpense = 0, excludedTotal = 0, excludedCount = 0;
+    filtered.forEach((t) => {
+      if (t.excludeFromTotals) {
+        excludedTotal += t.amount;
+        excludedCount++;
+      } else if (t.type === 'income') {
+        countedIncome += t.amount;
+      } else {
+        countedExpense += t.amount;
+      }
+    });
+    return { countedIncome, countedExpense, excludedTotal, excludedCount };
+  }, [filtered]);
+
   function addTransaction() {
     if (!form.description.trim() || !form.amount) return;
     const tx = {
@@ -1604,6 +1619,23 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
             </div>
           </div>
         </Card>
+      )}
+
+      {filtered.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl px-4 py-2.5" style={{ background: COLORS.bg }}>
+          <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Showing {filtered.length} transaction{filtered.length === 1 ? '' : 's'}:</span>
+          {filteredSummary.countedIncome > 0 && (
+            <span className="font-body text-xs font-semibold" style={{ color: COLORS.teal }}>+{formatCurrency(filteredSummary.countedIncome)} counted income</span>
+          )}
+          {filteredSummary.countedExpense > 0 && (
+            <span className="font-body text-xs font-semibold" style={{ color: COLORS.coral }}>-{formatCurrency(filteredSummary.countedExpense)} counted expense</span>
+          )}
+          {filteredSummary.excludedCount > 0 && (
+            <span className="font-body text-xs font-semibold" style={{ color: COLORS.gold }}>
+              {formatCurrency(filteredSummary.excludedTotal)} excluded ({filteredSummary.excludedCount})
+            </span>
+          )}
+        </div>
       )}
 
       <Card style={{ padding: 0 }}>
