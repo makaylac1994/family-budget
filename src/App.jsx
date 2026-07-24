@@ -462,96 +462,32 @@ function CategoryBadge({ cat }) {
 
 function CategoryEditCell({ value, options, bucketGroups, onChange }) {
   const color = useCategoryColor(value);
-  const [open, setOpen] = useState(false);
-  const [activeGroup, setActiveGroup] = useState(null);
-
-  function toggleOpen() {
-    setOpen((v) => !v);
-    setActiveGroup(null);
-  }
-
-  function pick(val) {
-    onChange(val);
-    setOpen(false);
-    setActiveGroup(null);
-  }
-
   return (
     <div className="relative inline-block">
-      <button
-        type="button"
-        onClick={toggleOpen}
-        className="inline-flex items-center gap-1 rounded-full pl-2.5 pr-2 py-1 text-xs font-semibold font-body outline-none cursor-pointer"
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="appearance-none rounded-full pl-2.5 pr-6 py-1 text-xs font-semibold font-body outline-none cursor-pointer"
         style={{ background: `${color}22`, color, border: 'none' }}
       >
-        {value}
-        <ChevronDown size={11} />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => { setOpen(false); setActiveGroup(null); }} />
-          <div
-            className="absolute left-0 mt-1 rounded-xl p-1.5 z-20"
-            style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, boxShadow: '0 8px 24px rgba(33,31,61,0.15)', width: 200, maxHeight: 280, overflowY: 'auto' }}
-          >
-            {!activeGroup ? (
-              <>
-                <p className="font-body text-xs font-semibold px-2 py-1" style={{ color: COLORS.inkSoft }}>Categories</p>
-                {options.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => pick(c)}
-                    className="w-full text-left rounded-lg px-2 py-1.5 font-body text-xs"
-                    style={{ color: c === value ? COLORS.violet : COLORS.ink, fontWeight: c === value ? 600 : 400 }}
-                  >
-                    {c}
-                  </button>
+        {bucketGroups && bucketGroups.length > 0 ? (
+          <>
+            <optgroup label="Categories">
+              {options.map((c) => <option key={c} value={c} style={{ color: COLORS.ink, background: '#fff' }}>{c}</option>)}
+            </optgroup>
+            {bucketGroups.map((grp) => (
+              <optgroup key={grp.id} label={grp.label}>
+                {grp.buckets.map((g) => (
+                  <option key={g.id} value={g.name} style={{ color: COLORS.ink, background: '#fff' }}>{g.name}</option>
                 ))}
-                {bucketGroups && bucketGroups.length > 0 && (
-                  <>
-                    <p className="font-body text-xs font-semibold px-2 py-1 mt-1" style={{ color: COLORS.inkSoft }}>Savings &amp; Annual</p>
-                    {bucketGroups.map((grp) => (
-                      <button
-                        key={grp.id}
-                        onClick={() => setActiveGroup(grp)}
-                        className="w-full flex items-center justify-between rounded-lg px-2 py-1.5 font-body text-xs"
-                        style={{ color: COLORS.ink }}
-                      >
-                        {grp.label}
-                        <ChevronRight size={12} style={{ color: COLORS.inkSoft }} />
-                      </button>
-                    ))}
-                  </>
-                )}
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={() => setActiveGroup(null)}
-                  className="w-full flex items-center gap-1 rounded-lg px-2 py-1.5 font-body text-xs font-semibold mb-1"
-                  style={{ color: COLORS.violet }}
-                >
-                  <ChevronLeft size={12} /> {activeGroup.label}
-                </button>
-                {activeGroup.buckets.length === 0 ? (
-                  <p className="font-body text-xs px-2 py-1" style={{ color: COLORS.inkSoft }}>No buckets here yet.</p>
-                ) : (
-                  activeGroup.buckets.map((g) => (
-                    <button
-                      key={g.id}
-                      onClick={() => pick(g.name)}
-                      className="w-full text-left rounded-lg px-2 py-1.5 font-body text-xs"
-                      style={{ color: g.name === value ? COLORS.violet : COLORS.ink, fontWeight: g.name === value ? 600 : 400 }}
-                    >
-                      {g.name}
-                    </button>
-                  ))
-                )}
-              </>
-            )}
-          </div>
-        </>
-      )}
+              </optgroup>
+            ))}
+          </>
+        ) : (
+          options.map((c) => <option key={c} value={c} style={{ color: COLORS.ink, background: '#fff' }}>{c}</option>)
+        )}
+      </select>
+      <ChevronDown size={11} className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2" style={{ color }} />
     </div>
   );
 }
