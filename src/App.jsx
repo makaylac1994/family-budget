@@ -919,7 +919,7 @@ function DashboardView({ transactions, budgets, bills, goals, month, setMonth, s
 
 /* ---------------------------------- Ledger ---------------------------------- */
 
-function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts, catFilter, setCatFilter, sourceFilter, setSourceFilter, typeFilter, setTypeFilter, lastSyncAt }) {
+function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts, catFilter, setCatFilter, sourceFilter, setSourceFilter, typeFilter, setTypeFilter, lastSyncAt, bucketFilter, setBucketFilter }) {
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -1047,6 +1047,12 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
   const [form, setForm] = useState({ date: todayStr(), description: '', category: 'Groceries', amount: '', type: 'expense' });
 
   const filtered = useMemo(() => {
+    if (bucketFilter) {
+      return transactions
+        .filter((t) => t.savingsAllocations && t.savingsAllocations.some((a) => a.bucketId === bucketFilter))
+        .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
+        .sort((a, b) => b.date.localeCompare(a.date));
+    }
     return transactions
       .filter((t) => t.date.startsWith(month))
       .filter((t) => catFilter === 'All' || t.category === catFilter || (t.splits && t.splits.some((s) => s.category === catFilter)))
@@ -1054,7 +1060,7 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
       .filter((t) => typeFilter === 'All' || t.type === typeFilter)
       .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [transactions, month, catFilter, sourceFilter, typeFilter, accountsById, search]);
+  }, [transactions, month, catFilter, sourceFilter, typeFilter, bucketFilter, accountsById, search]);
 
   function addTransaction() {
     if (!form.description.trim() || !form.amount) return;
@@ -1389,9 +1395,21 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Ledger</h2>
-          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Every dollar in and out, filterable by month.</p>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>
+            {bucketFilter ? 'Every transfer tied to this bucket, across all time.' : 'Every dollar in and out, filterable by month.'}
+          </p>
         </div>
-        <MonthNav month={month} setMonth={setMonth} />
+        {bucketFilter ? (
+          <button
+            onClick={() => setBucketFilter(null)}
+            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold font-body"
+            style={{ background: COLORS.violetSoft, color: COLORS.violet }}
+          >
+            <PiggyBank size={14} /> {goals.find((g) => g.id === bucketFilter)?.name || 'Bucket'} <X size={13} />
+          </button>
+        ) : (
+          <MonthNav month={month} setMonth={setMonth} />
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -2356,7 +2374,7 @@ function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDeposi
   );
 }
 
-function SavingsView({ goals, updateGoals, transactions, accounts }) {
+function SavingsView({ goals, updateGoals, transactions, accounts, annualAccountId }) {
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState('');
   const [target, setTarget] = useState('');
@@ -2373,21 +2391,26 @@ function SavingsView({ goals, updateGoals, transactions, accounts }) {
 
   const SAVINGS_SUBTYPES = ['savings', 'money market', 'cd', 'hsa'];
   const savingsAccounts = useMemo(
-    () => (accounts || []).filter((a) => SAVINGS_SUBTYPES.includes((a.subtype || '').toLowerCase())),
-    [accounts]
+    () => (accounts || []).filter((a) => SAVINGS_SUBTYPES.includes((a.subtype || '').toLowerCase()) && a.id !== annualAccountId),
+    [accounts, annualAccountId]
   );
   const savingsAccountIds = useMemo(() => new Set(savingsAccounts.map((a) => a.id)), [savingsAccounts]);
+  // Buckets linked to the Annual account live entirely in the Annual tab instead.
+  const visibleGoals = useMemo(
+    () => goals.filter((g) => !annualAccountId || g.accountId !== annualAccountId),
+    [goals, annualAccountId]
+  );
 
   const perAccountReconcile = useMemo(() => savingsAccounts.map((a) => {
-    const linkedGoals = goals.filter((g) => g.accountId === a.id);
+    const linkedGoals = visibleGoals.filter((g) => g.accountId === a.id);
     const allocated = linkedGoals.reduce((s, g) => s + (g.saved || 0), 0);
     const diff = Math.round(((Number(a.balance) || 0) - allocated) * 100) / 100;
     return { account: a, allocated, diff, linkedGoals };
-  }), [savingsAccounts, goals]);
+  }), [savingsAccounts, visibleGoals]);
 
   const unlinkedGoals = useMemo(
-    () => goals.filter((g) => !g.accountId || !savingsAccountIds.has(g.accountId)),
-    [goals, savingsAccountIds]
+    () => visibleGoals.filter((g) => !g.accountId || !savingsAccountIds.has(g.accountId)),
+    [visibleGoals, savingsAccountIds]
   );
   const unlinkedTotal = unlinkedGoals.reduce((s, g) => s + (g.saved || 0), 0);
 
@@ -2408,7 +2431,7 @@ function SavingsView({ goals, updateGoals, transactions, accounts }) {
     return map;
   }, [transactions]);
 
-  const hasPending = Object.values(pendingByBucket).some((v) => v !== 0);
+  const hasPending = visibleGoals.some((g) => pendingByBucket[g.id]);
 
   function addBucket() {
     if (!name.trim()) return;
@@ -2463,7 +2486,7 @@ function SavingsView({ goals, updateGoals, transactions, accounts }) {
             Tagged in the ledger but not yet confirmed with the "Transferred" checkbox.
           </p>
           <div className="grid sm:grid-cols-2 gap-2">
-            {goals.filter((g) => pendingByBucket[g.id]).map((g) => {
+            {visibleGoals.filter((g) => pendingByBucket[g.id]).map((g) => {
               const amt = pendingByBucket[g.id];
               return (
                 <div key={g.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: '#fff' }}>
@@ -2494,7 +2517,7 @@ function SavingsView({ goals, updateGoals, transactions, accounts }) {
         </Card>
       )}
 
-      {goals.length === 0 ? (
+      {visibleGoals.length === 0 ? (
         <Card><EmptyState icon={Target} title="No savings buckets yet" subtitle="Create one for anything you're setting money aside for &mdash; an emergency fund, a trip, a house." /></Card>
       ) : (
         <div className="space-y-5">
@@ -2593,6 +2616,187 @@ function SavingsView({ goals, updateGoals, transactions, accounts }) {
     </div>
   );
 }
+
+/* ---------------------------------- Annual ---------------------------------- */
+
+function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBucket, annualAccountId }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [name, setName] = useState('');
+  const [target, setTarget] = useState('');
+  const [deposits, setDeposits] = useState({});
+
+  const account = (accounts || []).find((a) => a.id === annualAccountId);
+  const bucketGoals = useMemo(() => goals.filter((g) => g.accountId === annualAccountId), [goals, annualAccountId]);
+  const allocated = bucketGoals.reduce((s, g) => s + (g.saved || 0), 0);
+  const diff = account ? Math.round(((Number(account.balance) || 0) - allocated) * 100) / 100 : 0;
+  const perAccountReconcile = account ? [{ account, allocated, diff, linkedGoals: bucketGoals }] : [];
+  const savingsAccountsList = account ? [account] : [];
+
+  function addBucket() {
+    if (!name.trim()) return;
+    const t = parseFloat(target);
+    updateGoals([...goals, { id: uid(), name: name.trim(), target: t > 0 ? t : null, saved: 0, accountId: annualAccountId }]);
+    setName(''); setTarget(''); setShowAdd(false);
+  }
+
+  function addFunds(id) {
+    const amt = parseFloat(deposits[id]);
+    if (!amt) return;
+    updateGoals(goals.map((g) => g.id === id ? { ...g, saved: g.saved + amt } : g));
+    setDeposits({ ...deposits, [id]: '' });
+  }
+
+  function updateTarget(id, val) {
+    const t = parseFloat(val);
+    updateGoals(goals.map((g) => g.id === id ? { ...g, target: t > 0 ? t : null } : g));
+  }
+
+  function updateSavedAmount(id, val) {
+    const v = Math.max(0, parseFloat(val) || 0);
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, saved: v } : g)));
+  }
+
+  function updateBucketName(id, val) {
+    const v = val.trim();
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, name: v || g.name } : g)));
+  }
+
+  function removeBucket(id) {
+    updateGoals(goals.filter((g) => g.id !== id));
+  }
+
+  function updateGoalAccount(id, newAccountId) {
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, accountId: newAccountId || undefined } : g)));
+  }
+
+  if (!annualAccountId) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Annual</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Track an account where money actively flows in and out, separate from long-term savings.</p>
+        </div>
+        <Card>
+          <EmptyState
+            icon={CalendarClock}
+            title="No account chosen yet"
+            subtitle="Head to Settings and pick which connected account this should track."
+          />
+          <div className="flex justify-center mt-2">
+            <GhostButton onClick={() => setTab('settings')}>Go to Settings</GhostButton>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!account) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Annual</h2>
+        </div>
+        <Card>
+          <EmptyState
+            icon={CalendarClock}
+            title="Account not found"
+            subtitle="The account chosen in Settings isn't connected anymore &mdash; pick a different one."
+          />
+          <div className="flex justify-center mt-2">
+            <GhostButton onClick={() => setTab('settings')}>Go to Settings</GhostButton>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Annual</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>
+            {account.name}{account.mask ? ` ••${account.mask}` : ''} &mdash; money flows in and out here, tracked separately from long-term savings.
+          </p>
+        </div>
+        <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New bucket</PrimaryButton>
+      </div>
+
+      {/* Level 1: account + a lighter-weight reality check than the full Savings tab version. */}
+      <div className="flex items-center justify-between rounded-2xl px-5 py-3" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+        <div className="flex items-center gap-4">
+          <div>
+            <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Real balance</p>
+            <p className="font-display font-semibold" style={{ color: COLORS.ink }}>{formatCurrency(account.balance)}</p>
+          </div>
+          <div>
+            <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Allocated to buckets</p>
+            <p className="font-display font-semibold" style={{ color: COLORS.ink }}>{formatCurrency(allocated)}</p>
+          </div>
+        </div>
+        {diff === 0 ? (
+          <span className="inline-flex items-center gap-1 font-body text-xs font-semibold rounded-full px-2.5 py-1" style={{ background: `${COLORS.teal}22`, color: COLORS.teal }}>
+            <Check size={11} /> Matches
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 font-body text-xs font-semibold rounded-full px-2.5 py-1" style={{ background: '#FFFBF0', color: COLORS.gold }}>
+            <Flame size={11} /> {formatCurrency(Math.abs(diff))} {diff > 0 ? 'unassigned' : 'over-allocated'}
+          </span>
+        )}
+      </div>
+
+      {showAdd && (
+        <Card>
+          <div className="flex flex-wrap gap-2 items-end">
+            <div className="flex-1 min-w-[160px]">
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Bucket name</label>
+              <TextInput placeholder="e.g. Amazon" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Target (optional)</label>
+              <TextInput type="number" min="0" placeholder="No target" value={target} onChange={(e) => setTarget(e.target.value)} style={{ width: 140 }} />
+            </div>
+            <PrimaryButton onClick={addBucket}><Check size={15} /> Create</PrimaryButton>
+          </div>
+        </Card>
+      )}
+
+      {/* Level 2: buckets for this account. */}
+      {bucketGoals.length === 0 ? (
+        <Card><EmptyState icon={Target} title="No buckets yet" subtitle="Create one above for each thing this account covers &mdash; Amazon, insurance, Costco, whatever you're tracking." /></Card>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-4">
+          {bucketGoals.map((g) => (
+            <div key={g.id}>
+              <BucketCard
+                g={g}
+                savingsAccounts={savingsAccountsList}
+                perAccountReconcile={perAccountReconcile}
+                deposit={deposits[g.id]}
+                onDepositChange={(v) => setDeposits({ ...deposits, [g.id]: v })}
+                onAddFunds={() => addFunds(g.id)}
+                updateGoalAccount={updateGoalAccount}
+                updateTarget={updateTarget}
+                updateSavedAmount={updateSavedAmount}
+                updateBucketName={updateBucketName}
+                removeBucket={removeBucket}
+              />
+              {/* Level 3: this bucket's individual transfers, via the filtered Ledger. */}
+              <button
+                onClick={() => goToLedgerBucket(g.id)}
+                className="w-full font-body text-xs font-semibold mt-1.5 text-center"
+                style={{ color: COLORS.violet }}
+              >
+                View transfers &rarr;
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 /* ---------------------------------- Bills ---------------------------------- */
 
@@ -2864,7 +3068,30 @@ function CategoriesSection({ budgets, transactions, goals, hiddenCategories, upd
   );
 }
 
-function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes }) {
+function AnnualAccountSection({ accounts, annualAccountId, updateAnnualAccountId }) {
+  const savingsAccounts = (accounts || []).filter((a) => ['savings', 'money market', 'cd', 'hsa'].includes((a.subtype || '').toLowerCase()));
+
+  return (
+    <Card>
+      <h3 className="font-display font-semibold mb-2" style={{ color: COLORS.ink }}>Annual tracking</h3>
+      <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+        Pick which connected account behaves like an active fund with money flowing in and out (not just long-term savings) &mdash; it'll get its own "Annual" tab instead of sitting in Savings.
+      </p>
+      {savingsAccounts.length === 0 ? (
+        <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Connect a savings account on the Accounts tab first.</p>
+      ) : (
+        <Select value={annualAccountId || ''} onChange={(e) => updateAnnualAccountId(e.target.value || null)} style={{ maxWidth: 320 }}>
+          <option value="">None</option>
+          {savingsAccounts.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ••${a.mask}` : ''}</option>
+          ))}
+        </Select>
+      )}
+    </Card>
+  );
+}
+
+function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId }) {
   return (
     <div className="space-y-5">
       <div>
@@ -2874,6 +3101,7 @@ function SettingsView({ bills, updateBills, month, budgets, transactions, goals,
 
       <NotesSection notes={notes} updateNotes={updateNotes} />
       <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} />
+      <AnnualAccountSection accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} />
       <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />
     </div>
   );
@@ -3223,6 +3451,7 @@ const TABS = [
   { id: 'accounts', label: 'Accounts', icon: Landmark },
   { id: 'budgets', label: 'Budgets', icon: PiggyBank },
   { id: 'savings', label: 'Savings', icon: Coins },
+  { id: 'annual', label: 'Annual', icon: CalendarClock },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
 
@@ -3239,6 +3468,7 @@ export default function App() {
   const [ledgerCatFilter, setLedgerCatFilter] = useState('All');
   const [ledgerSourceFilter, setLedgerSourceFilter] = useState('All');
   const [ledgerTypeFilter, setLedgerTypeFilter] = useState('All');
+  const [ledgerBucketFilter, setLedgerBucketFilter] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [budgets, setBudgets] = useState({});
   const [goals, setGoals] = useState([]);
@@ -3249,6 +3479,7 @@ export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [notes, setNotes] = useState('');
+  const [annualAccountId, setAnnualAccountId] = useState(null);
 
   // Track sign-in state.
   useEffect(() => {
@@ -3297,6 +3528,7 @@ export default function App() {
       setAccounts(d?.accounts || []);
       setLastSyncAt(d?.lastSyncAt || null);
       setNotes(d?.notes || '');
+      setAnnualAccountId(d?.annualAccountId || null);
       setInviteCode(d?.inviteCode || '');
       setLoading(false);
     }, (err) => {
@@ -3368,11 +3600,21 @@ export default function App() {
   function updateHiddenCategories(next) { setHiddenCategories(next); syncField('hiddenCategories', next); }
   function updateCategoryMemory(next) { setCategoryMemory(next); syncField('categoryMemory', next); }
   function updateNotes(next) { setNotes(next); syncField('notes', next); }
+  function updateAnnualAccountId(next) { setAnnualAccountId(next); syncField('annualAccountId', next); }
 
   function goToLedger(type, source) {
     setLedgerTypeFilter(type || 'All');
     setLedgerSourceFilter(source || 'All');
     setLedgerCatFilter('All');
+    setLedgerBucketFilter(null);
+    setTab('ledger');
+  }
+
+  function goToLedgerBucket(bucketId) {
+    setLedgerTypeFilter('All');
+    setLedgerSourceFilter('All');
+    setLedgerCatFilter('All');
+    setLedgerBucketFilter(bucketId);
     setTab('ledger');
   }
 
@@ -3471,7 +3713,7 @@ export default function App() {
               <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} />
             )}
             {tab === 'ledger' && (
-              <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} catFilter={ledgerCatFilter} setCatFilter={setLedgerCatFilter} sourceFilter={ledgerSourceFilter} setSourceFilter={setLedgerSourceFilter} typeFilter={ledgerTypeFilter} setTypeFilter={setLedgerTypeFilter} lastSyncAt={lastSyncAt} />
+              <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} catFilter={ledgerCatFilter} setCatFilter={setLedgerCatFilter} sourceFilter={ledgerSourceFilter} setSourceFilter={setLedgerSourceFilter} typeFilter={ledgerTypeFilter} setTypeFilter={setLedgerTypeFilter} lastSyncAt={lastSyncAt} bucketFilter={ledgerBucketFilter} setBucketFilter={setLedgerBucketFilter} />
             )}
             {tab === 'accounts' && (
               <AccountsView accounts={accounts} transactions={transactions} updateTransactions={updateTransactions} />
@@ -3480,10 +3722,13 @@ export default function App() {
               <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} />
             )}
             {tab === 'savings' && (
-              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} />
+              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} annualAccountId={annualAccountId} />
+            )}
+            {tab === 'annual' && (
+              <AnnualView accounts={accounts} goals={goals} updateGoals={updateGoals} setTab={setTab} goToLedgerBucket={goToLedgerBucket} annualAccountId={annualAccountId} />
             )}
             {tab === 'settings' && (
-              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} />
+              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} />
             )}
           </>
         )}
