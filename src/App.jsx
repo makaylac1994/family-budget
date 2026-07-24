@@ -460,30 +460,98 @@ function CategoryBadge({ cat }) {
   );
 }
 
-function CategoryEditCell({ value, options, bucketOptions, onChange }) {
+function CategoryEditCell({ value, options, bucketGroups, onChange }) {
   const color = useCategoryColor(value);
+  const [open, setOpen] = useState(false);
+  const [activeGroup, setActiveGroup] = useState(null);
+
+  function toggleOpen() {
+    setOpen((v) => !v);
+    setActiveGroup(null);
+  }
+
+  function pick(val) {
+    onChange(val);
+    setOpen(false);
+    setActiveGroup(null);
+  }
+
   return (
     <div className="relative inline-block">
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="appearance-none rounded-full pl-2.5 pr-6 py-1 text-xs font-semibold font-body outline-none cursor-pointer"
+      <button
+        type="button"
+        onClick={toggleOpen}
+        className="inline-flex items-center gap-1 rounded-full pl-2.5 pr-2 py-1 text-xs font-semibold font-body outline-none cursor-pointer"
         style={{ background: `${color}22`, color, border: 'none' }}
       >
-        {bucketOptions && bucketOptions.length > 0 ? (
-          <>
-            <optgroup label="Categories">
-              {options.map((c) => <option key={c} value={c} style={{ color: COLORS.ink, background: '#fff' }}>{c}</option>)}
-            </optgroup>
-            <optgroup label="Savings buckets">
-              {bucketOptions.map((c) => <option key={c} value={c} style={{ color: COLORS.ink, background: '#fff' }}>{`\uD83D\uDC37 ${c}`}</option>)}
-            </optgroup>
-          </>
-        ) : (
-          options.map((c) => <option key={c} value={c} style={{ color: COLORS.ink, background: '#fff' }}>{c}</option>)
-        )}
-      </select>
-      <ChevronDown size={11} className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2" style={{ color }} />
+        {value}
+        <ChevronDown size={11} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => { setOpen(false); setActiveGroup(null); }} />
+          <div
+            className="absolute left-0 mt-1 rounded-xl p-1.5 z-20"
+            style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, boxShadow: '0 8px 24px rgba(33,31,61,0.15)', width: 200, maxHeight: 280, overflowY: 'auto' }}
+          >
+            {!activeGroup ? (
+              <>
+                <p className="font-body text-xs font-semibold px-2 py-1" style={{ color: COLORS.inkSoft }}>Categories</p>
+                {options.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => pick(c)}
+                    className="w-full text-left rounded-lg px-2 py-1.5 font-body text-xs"
+                    style={{ color: c === value ? COLORS.violet : COLORS.ink, fontWeight: c === value ? 600 : 400 }}
+                  >
+                    {c}
+                  </button>
+                ))}
+                {bucketGroups && bucketGroups.length > 0 && (
+                  <>
+                    <p className="font-body text-xs font-semibold px-2 py-1 mt-1" style={{ color: COLORS.inkSoft }}>Savings &amp; Annual</p>
+                    {bucketGroups.map((grp) => (
+                      <button
+                        key={grp.id}
+                        onClick={() => setActiveGroup(grp)}
+                        className="w-full flex items-center justify-between rounded-lg px-2 py-1.5 font-body text-xs"
+                        style={{ color: COLORS.ink }}
+                      >
+                        {grp.label}
+                        <ChevronRight size={12} style={{ color: COLORS.inkSoft }} />
+                      </button>
+                    ))}
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => setActiveGroup(null)}
+                  className="w-full flex items-center gap-1 rounded-lg px-2 py-1.5 font-body text-xs font-semibold mb-1"
+                  style={{ color: COLORS.violet }}
+                >
+                  <ChevronLeft size={12} /> {activeGroup.label}
+                </button>
+                {activeGroup.buckets.length === 0 ? (
+                  <p className="font-body text-xs px-2 py-1" style={{ color: COLORS.inkSoft }}>No buckets here yet.</p>
+                ) : (
+                  activeGroup.buckets.map((g) => (
+                    <button
+                      key={g.id}
+                      onClick={() => pick(g.name)}
+                      className="w-full text-left rounded-lg px-2 py-1.5 font-body text-xs"
+                      style={{ color: g.name === value ? COLORS.violet : COLORS.ink, fontWeight: g.name === value ? 600 : 400 }}
+                    >
+                      {g.name}
+                    </button>
+                  ))
+                )}
+              </>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -940,6 +1008,19 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
     () => (accounts || []).filter((a) => ['savings', 'money market', 'cd', 'hsa'].includes((a.subtype || '').toLowerCase())),
     [accounts]
   );
+  const bucketGroups = useMemo(() => {
+    const linkedIds = new Set(savingsAccountsList.map((a) => a.id));
+    const groups = savingsAccountsList
+      .map((a) => ({
+        id: a.id,
+        label: `${a.name}${a.mask ? ` ••${a.mask}` : ''}`,
+        buckets: goals.filter((g) => g.accountId === a.id),
+      }))
+      .filter((grp) => grp.buckets.length > 0);
+    const unlinked = goals.filter((g) => !g.accountId || !linkedIds.has(g.accountId));
+    if (unlinked.length) groups.push({ id: 'unlinked', label: 'Not linked to an account', buckets: unlinked });
+    return groups;
+  }, [savingsAccountsList, goals]);
   function togglePaymentSource(id) {
     const tx = transactions.find((t) => t.id === id);
     if (!tx) return;
@@ -1663,7 +1744,7 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                             Split &middot; {t.splits.length}
                           </button>
                         ) : (
-                          <CategoryEditCell value={t.category} options={categoryOptionsFor(t.category)} onChange={(cat) => updateCategoryOrAllocate(t.id, cat)} />
+                          <CategoryEditCell value={t.category} options={categoryOptionsFor(t.category)} bucketGroups={bucketGroups} onChange={(cat) => updateCategoryOrAllocate(t.id, cat)} />
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-right">
@@ -1703,7 +1784,7 @@ function LedgerView({ transactions, updateTransactions, budgets, month, setMonth
                         <td className="px-4 py-2"></td>
                         <td className="px-4 py-2 pl-8 text-xs" style={{ color: COLORS.inkSoft }}>&#8618; portion</td>
                         <td className="px-4 py-2">
-                          <CategoryEditCell value={s.category} options={categoryOptionsFor(s.category)} onChange={(cat) => updateSplitCategory(t.id, s.id, cat)} />
+                          <CategoryEditCell value={s.category} options={categoryOptionsFor(s.category)} bucketGroups={bucketGroups} onChange={(cat) => updateSplitCategory(t.id, s.id, cat)} />
                         </td>
                         <td className="px-4 py-2 text-right font-semibold text-sm" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
                           {t.type === 'income' ? '+' : '-'}{formatCurrency(s.amount)}
@@ -2262,7 +2343,7 @@ function BudgetsView({ budgets, updateBudgets, transactions, month, setMonth, ca
 
 /* ---------------------------------- Goals ---------------------------------- */
 
-function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateSavedAmount, updateBucketName, removeBucket }) {
+function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateSavedAmount, updateBucketName, removeBucket, onViewTransfers }) {
   const hasTarget = g.target != null && g.target > 0;
   const pct = hasTarget ? (g.saved / g.target) * 100 : 0;
   const done = hasTarget && pct >= 100;
@@ -2370,11 +2451,20 @@ function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDeposi
           style={{ fontSize: 12 }}
         />
       </div>
+      {onViewTransfers && (
+        <button
+          onClick={onViewTransfers}
+          className="w-full font-body text-xs font-semibold mt-3 text-center"
+          style={{ color: COLORS.violet }}
+        >
+          View transfers &rarr;
+        </button>
+      )}
     </Card>
   );
 }
 
-function SavingsView({ goals, updateGoals, transactions, accounts, annualAccountId }) {
+function SavingsView({ goals, updateGoals, transactions, accounts, annualAccountId, goToLedgerBucket }) {
   const [showAdd, setShowAdd] = useState(false);
   const [name, setName] = useState('');
   const [target, setTarget] = useState('');
@@ -2578,6 +2668,7 @@ function SavingsView({ goals, updateGoals, transactions, accounts, annualAccount
                             updateSavedAmount={updateSavedAmount}
                             updateBucketName={updateBucketName}
                             removeBucket={removeBucket}
+                            onViewTransfers={() => goToLedgerBucket(g.id)}
                           />
                         ))}
                       </div>
@@ -2606,6 +2697,7 @@ function SavingsView({ goals, updateGoals, transactions, accounts, annualAccount
                     updateSavedAmount={updateSavedAmount}
                     updateBucketName={updateBucketName}
                     removeBucket={removeBucket}
+                    onViewTransfers={() => goToLedgerBucket(g.id)}
                   />
                 ))}
               </div>
@@ -2767,29 +2859,21 @@ function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBucket, an
       ) : (
         <div className="grid sm:grid-cols-2 gap-4">
           {bucketGoals.map((g) => (
-            <div key={g.id}>
-              <BucketCard
-                g={g}
-                savingsAccounts={savingsAccountsList}
-                perAccountReconcile={perAccountReconcile}
-                deposit={deposits[g.id]}
-                onDepositChange={(v) => setDeposits({ ...deposits, [g.id]: v })}
-                onAddFunds={() => addFunds(g.id)}
-                updateGoalAccount={updateGoalAccount}
-                updateTarget={updateTarget}
-                updateSavedAmount={updateSavedAmount}
-                updateBucketName={updateBucketName}
-                removeBucket={removeBucket}
-              />
-              {/* Level 3: this bucket's individual transfers, via the filtered Ledger. */}
-              <button
-                onClick={() => goToLedgerBucket(g.id)}
-                className="w-full font-body text-xs font-semibold mt-1.5 text-center"
-                style={{ color: COLORS.violet }}
-              >
-                View transfers &rarr;
-              </button>
-            </div>
+            <BucketCard
+              key={g.id}
+              g={g}
+              savingsAccounts={savingsAccountsList}
+              perAccountReconcile={perAccountReconcile}
+              deposit={deposits[g.id]}
+              onDepositChange={(v) => setDeposits({ ...deposits, [g.id]: v })}
+              onAddFunds={() => addFunds(g.id)}
+              updateGoalAccount={updateGoalAccount}
+              updateTarget={updateTarget}
+              updateSavedAmount={updateSavedAmount}
+              updateBucketName={updateBucketName}
+              removeBucket={removeBucket}
+              onViewTransfers={() => goToLedgerBucket(g.id)}
+            />
           ))}
         </div>
       )}
@@ -3722,7 +3806,7 @@ export default function App() {
               <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} />
             )}
             {tab === 'savings' && (
-              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} annualAccountId={annualAccountId} />
+              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} annualAccountId={annualAccountId} goToLedgerBucket={goToLedgerBucket} />
             )}
             {tab === 'annual' && (
               <AnnualView accounts={accounts} goals={goals} updateGoals={updateGoals} setTab={setTab} goToLedgerBucket={goToLedgerBucket} annualAccountId={annualAccountId} />
