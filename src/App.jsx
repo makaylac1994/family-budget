@@ -1,0 +1,3934 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import Papa from 'papaparse';
+import { db, auth, functions } from './firebase';
+import { doc, onSnapshot, setDoc, getDoc, updateDoc, arrayUnion, collection } from 'firebase/firestore';
+import {
+  onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
+} from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
+import { usePlaidLink } from 'react-plaid-link';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
+import {
+  Wallet, Receipt, PiggyBank, Target, CalendarClock, Upload, Plus, Trash2,
+  Search, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, TrendingUp, TrendingDown, X, Check,
+  Loader2, Sparkles, Flame, Scissors, Palette, Settings2, Coins, Landmark, RefreshCw,
+  CreditCard, Repeat,
+} from 'lucide-react';
+
+/* ---------------------------------- tokens ---------------------------------- */
+
+const COLORS = {
+  bg: '#F5F3FF',
+  surface: '#FFFFFF',
+  ink: '#211F3D',
+  inkSoft: '#6E6B92',
+  border: '#E7E3FB',
+  teal: '#219E8B',
+  coral: '#FF6B6B',
+  gold: '#FFB627',
+  violet: '#7C5CFC',
+  violetSoft: '#EFE9FF',
+};
+
+const CATEGORY_COLORS = {
+  Housing: '#7C5CFC',
+  Groceries: '#219E8B',
+  Transportation: '#3FA7D6',
+  Utilities: '#FFB627',
+  Entertainment: '#FF6B6B',
+  'Dining Out': '#F15BB5',
+  Health: '#2EC4B6',
+  Shopping: '#F3722C',
+  Savings: '#577590',
+  Other: '#9C89B8',
+  Income: '#219E8B',
+};
+
+const DEFAULT_EXPENSE_CATEGORIES = [
+  'Housing', 'Groceries', 'Transportation', 'Utilities',
+  'Entertainment', 'Dining Out', 'Health', 'Shopping', 'Other',
+];
+
+const PRESET_SWATCHES = [
+  '#7C5CFC', '#219E8B', '#3FA7D6', '#FFB627', '#FF6B6B',
+  '#F15BB5', '#2EC4B6', '#F3722C', '#577590', '#9C89B8',
+  '#E63946', '#06A77D',
+];
+
+const SAVINGS_SUBTYPES = ['savings', 'money market', 'cd', 'hsa'];
+function isSavingsAccount(account) {
+  return SAVINGS_SUBTYPES.includes((account.subtype || '').toLowerCase());
+}
+
+const CategoryColorContext = React.createContext({});
+
+/* ---------------------------------- helpers ---------------------------------- */
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function indexById(items) {
+  return Object.fromEntries((items || []).map((item) => [item.id, item]));
+}
+
+function generateInviteCode() {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O or 1/I, easy to read aloud
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+function formatCurrency(n) {
+  const num = Number(n) || 0;
+  return num.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+}
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function currentMonthStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthLabel(monthStr) {
+  const [y, m] = monthStr.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+}
+
+function shiftMonth(monthStr, delta) {
+  const [y, m] = monthStr.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function categoryColor(cat, overrides) {
+  return (overrides && overrides[cat]) || CATEGORY_COLORS[cat] || COLORS.violet;
+}
+
+function useCategoryColor(cat) {
+  const overrides = React.useContext(CategoryColorContext);
+  return categoryColor(cat, overrides);
+}
+
+function normalizeDate(raw) {
+  if (!raw) return todayStr();
+  const s = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+  return todayStr();
+}
+
+function normalizeDescription(desc) {
+  return String(desc || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\d+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function merchantToken(desc) {
+  const parts = normalizeDescription(desc).split(' ').filter(Boolean);
+  return parts.length ? parts[0] : '';
+}
+
+function txSignature(t) {
+  return `${t.date}|${Math.round(t.amount * 100)}|${t.type}|${normalizeDescription(t.description)}`;
+}
+
+// Determines whether a transaction was paid from a bank account ('bank') or
+// charged to a credit card ('card'). Explicit manual overrides win; otherwise
+// it's inferred from the connected Plaid account's type; otherwise it falls
+// back to a sensible default by transaction type.
+function paymentSourceFor(t, accountsById) {
+  if (t.paymentSource) return t.paymentSource;
+  if (t.plaidAccountId && accountsById && accountsById[t.plaidAccountId]) {
+    return accountsById[t.plaidAccountId].type === 'credit' ? 'card' : 'bank';
+  }
+  return t.type === 'income' ? 'bank' : 'card';
+}
+
+// Amount to count toward spending totals, excluding any portion allocated to
+// a savings bucket (splits or whole-transaction).
+function nonBucketAmount(t, bucketNameSet) {
+  if (t.splits && t.splits.length) {
+    return t.splits.reduce((sum, sp) => sum + (bucketNameSet.has(sp.category) ? 0 : sp.amount), 0);
+  }
+  return bucketNameSet.has(t.category) ? 0 : t.amount;
+}
+
+// How much a bucket needs saved per month to hit its target by its target
+// date, based on what's left and how much time remains from today. Returns 0
+// if there's no target/target date, or if the target's already been reached.
+function monthlySavingsNeeded(g) {
+  if (!g.target || g.target <= 0 || !g.targetDate) return 0;
+  const remaining = Math.max(0, g.target - (g.saved || 0));
+  if (remaining <= 0) return 0;
+  const today = new Date();
+  const due = new Date(`${g.targetDate}T00:00:00`);
+  const msRemaining = due - today;
+  if (msRemaining <= 0) return remaining;
+  const monthsRemaining = Math.max(1, Math.ceil(msRemaining / (1000 * 60 * 60 * 24 * 30.44)));
+  return remaining / monthsRemaining;
+}
+
+function detectHeaderMap(fields) {
+  const map = {};
+  fields.forEach((f) => {
+    const key = f.toLowerCase().trim();
+    if (!map.date && /date/.test(key)) map.date = f;
+    if (!map.description && /(desc|memo|payee)/.test(key) && !/member/.test(key)) map.description = f;
+    if (!map.description && /name/.test(key) && !/member/.test(key)) map.description = f;
+    if (!map.amount && /(amount|amt)/.test(key)) map.amount = f;
+    if (!map.debit && /debit/.test(key)) map.debit = f;
+    if (!map.credit && /credit/.test(key)) map.credit = f;
+    if (!map.category && /categor/.test(key)) map.category = f;
+    if (!map.type && /type/.test(key)) map.type = f;
+    if (!map.member && /member/.test(key)) map.member = f;
+  });
+  return map;
+}
+
+function rowToTransaction(row, map, memory) {
+  const date = normalizeDate(map.date ? row[map.date] : '');
+
+  let description = map.description ? String(row[map.description] || '').trim() : '';
+  if (map.member && row[map.member]) {
+    const member = String(row[map.member]).trim();
+    if (member) description = description ? `${description} (${member})` : member;
+  }
+  if (!description) description = 'Imported transaction';
+
+  let amount = 0;
+  let type = 'expense';
+
+  if (map.amount) {
+    // Single signed-amount column (e.g. "-1750.00" = expense, "32.00" = income)
+    amount = parseFloat(String(row[map.amount]).replace(/[^0-9.\-]/g, ''));
+    if (Number.isNaN(amount)) amount = 0;
+    type = amount < 0 ? 'expense' : 'income';
+  } else if (map.debit || map.credit) {
+    // Separate Debit/Credit columns (only one is populated per row)
+    const debit = map.debit ? parseFloat(String(row[map.debit]).replace(/[^0-9.\-]/g, '')) : 0;
+    const credit = map.credit ? parseFloat(String(row[map.credit]).replace(/[^0-9.\-]/g, '')) : 0;
+    if (!Number.isNaN(debit) && debit > 0) {
+      amount = debit; type = 'expense';
+    } else if (!Number.isNaN(credit) && credit > 0) {
+      amount = credit; type = 'income';
+    }
+  } else if (map.type && row[map.type]) {
+    type = /income|credit|deposit/i.test(String(row[map.type])) ? 'income' : 'expense';
+  }
+
+  amount = Math.abs(amount) || 0;
+
+  let category = map.category && row[map.category]
+    ? String(row[map.category]).trim()
+    : (type === 'income' ? 'Income' : 'Other');
+
+  let memoryMatch = false;
+  if (memory) {
+    const exactKey = normalizeDescription(description);
+    const token = merchantToken(description);
+    if (exactKey && memory.exact && memory.exact[exactKey]) {
+      category = memory.exact[exactKey];
+      memoryMatch = true;
+    } else if (token && memory.merchant && memory.merchant[token]) {
+      category = memory.merchant[token];
+      memoryMatch = true;
+    }
+  }
+
+  return { id: uid(), date, description, category, amount, type, _memoryMatch: memoryMatch };
+}
+
+/* ---------------------------------- auth gate ---------------------------------- */
+
+function AuthShell({ children }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center px-5" style={{ background: COLORS.bg }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+        .font-display { font-family: 'Fredoka', sans-serif; }
+        .font-body { font-family: 'Inter', sans-serif; }
+      `}</style>
+      <div className="rounded-2xl p-6 w-full" style={{ maxWidth: 380, background: COLORS.surface, border: `1px solid ${COLORS.border}`, boxShadow: '0 2px 10px rgba(124,92,252,0.06)' }}>
+        <div className="flex items-center gap-2 mb-1">
+          <span style={{ fontSize: 26 }}>🫙</span>
+          <h1 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Family Budget</h1>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function AuthGate() {
+  const [mode, setMode] = useState('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    if (!email.trim() || !password) return;
+    setBusy(true);
+    setError('');
+    try {
+      if (mode === 'signup') {
+        await createUserWithEmailAndPassword(auth, email.trim(), password);
+      } else {
+        await signInWithEmailAndPassword(auth, email.trim(), password);
+      }
+    } catch (e) {
+      setError(e.message.replace(/^Firebase:\s*/, ''));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthShell>
+      <p className="font-body text-sm mb-4" style={{ color: COLORS.inkSoft }}>
+        {mode === 'signup' ? 'Create your account to get started.' : 'Sign in to your account.'}
+      </p>
+      <div className="space-y-2">
+        <TextInput type="email" placeholder="Email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <TextInput
+          type="password"
+          placeholder="Password"
+          autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+        />
+      </div>
+      {error && <p className="font-body text-xs mt-2" style={{ color: COLORS.coral }}>{error}</p>}
+      <div className="mt-3">
+        <PrimaryButton onClick={submit} disabled={busy} style={{ width: '100%', justifyContent: 'center' }}>
+          <Check size={15} /> {mode === 'signup' ? 'Create account' : 'Sign in'}
+        </PrimaryButton>
+      </div>
+      <button
+        onClick={() => { setMode(mode === 'signup' ? 'signin' : 'signup'); setError(''); }}
+        className="font-body text-xs font-semibold mt-3"
+        style={{ color: COLORS.violet }}
+      >
+        {mode === 'signup' ? 'Already have an account? Sign in' : "Don't have an account? Create one"}
+      </button>
+    </AuthShell>
+  );
+}
+
+function HouseholdSetup({ onCreate, onJoin }) {
+  const [mode, setMode] = useState('choose');
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function handleCreate() {
+    setBusy(true);
+    setError('');
+    try {
+      await onCreate();
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+
+  async function handleJoin() {
+    if (!code.trim()) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onJoin(code.trim());
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AuthShell>
+      {mode === 'choose' && (
+        <>
+          <p className="font-body text-sm mb-4" style={{ color: COLORS.inkSoft }}>
+            Set up a new household, or join one a family member already created.
+          </p>
+          <div className="space-y-2">
+            <PrimaryButton onClick={handleCreate} disabled={busy} style={{ width: '100%', justifyContent: 'center' }}>
+              <Plus size={15} /> Create a new household
+            </PrimaryButton>
+            <GhostButton onClick={() => setMode('join')} style={{ width: '100%', justifyContent: 'center' }}>
+              I have an invite code
+            </GhostButton>
+          </div>
+        </>
+      )}
+      {mode === 'join' && (
+        <>
+          <p className="font-body text-sm mb-4" style={{ color: COLORS.inkSoft }}>
+            Enter the invite code a family member shared with you.
+          </p>
+          <TextInput
+            placeholder="e.g. 7K9QRT"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleJoin(); }}
+          />
+          <div className="mt-3 flex gap-2">
+            <GhostButton onClick={() => setMode('choose')}>Back</GhostButton>
+            <PrimaryButton onClick={handleJoin} disabled={busy} style={{ flex: 1, justifyContent: 'center' }}>
+              <Check size={15} /> Join
+            </PrimaryButton>
+          </div>
+        </>
+      )}
+      {error && <p className="font-body text-xs mt-3" style={{ color: COLORS.coral }}>{error}</p>}
+      <button
+        onClick={() => signOut(auth)}
+        className="font-body text-xs font-semibold mt-4"
+        style={{ color: COLORS.inkSoft }}
+      >
+        Sign out
+      </button>
+    </AuthShell>
+  );
+}
+
+/* ---------------------------------- small UI ---------------------------------- */
+
+function JarBar({ pct, height = 14 }) {
+  const width = Math.min(Math.max(pct, 0), 100);
+  let color = COLORS.teal;
+  if (pct >= 100) color = COLORS.coral;
+  else if (pct >= 75) color = COLORS.gold;
+  return (
+    <div style={{ background: '#EEEBFA', borderRadius: 999, height, position: 'relative', overflow: 'hidden' }}>
+      <div style={{
+        width: `${width}%`, height: '100%', borderRadius: 999,
+        background: `linear-gradient(90deg, ${color}AA, ${color})`,
+        transition: 'width 0.5s ease',
+      }} />
+      {pct >= 100 && (
+        <Flame size={12} style={{ position: 'absolute', right: 4, top: height / 2 - 6, color: '#fff' }} />
+      )}
+    </div>
+  );
+}
+
+function Card({ children, style, className = '', onClick }) {
+  return (
+    <div
+      className={`rounded-2xl p-5 ${className} ${onClick ? 'cursor-pointer transition-transform hover:-translate-y-0.5' : ''}`}
+      style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, boxShadow: '0 2px 10px rgba(124,92,252,0.06)', ...style }}
+      onClick={onClick}
+    >
+      {children}
+    </div>
+  );
+}
+
+function CategoryBadge({ cat }) {
+  const c = useCategoryColor(cat);
+  return (
+    <span
+      className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold font-body"
+      style={{ background: `${c}22`, color: c }}
+    >
+      {cat}
+    </span>
+  );
+}
+
+function CategoryEditCell({ value, options, bucketGroups, onChange }) {
+  const color = useCategoryColor(value);
+  return (
+    <div className="relative inline-block">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="appearance-none rounded-full pl-2.5 pr-6 py-1 text-xs font-semibold font-body outline-none cursor-pointer"
+        style={{ background: `${color}22`, color, border: 'none' }}
+      >
+        {bucketGroups && bucketGroups.length > 0 ? (
+          <>
+            <optgroup label="Categories">
+              {options.map((c) => <option key={c} value={c} style={{ color: COLORS.ink, background: '#fff' }}>{c}</option>)}
+            </optgroup>
+            {bucketGroups.map((grp) => (
+              <optgroup key={grp.id} label={grp.label}>
+                {grp.buckets.map((g) => (
+                  <option key={g.id} value={g.name} style={{ color: COLORS.ink, background: '#fff' }}>{g.name}</option>
+                ))}
+              </optgroup>
+            ))}
+          </>
+        ) : (
+          options.map((c) => <option key={c} value={c} style={{ color: COLORS.ink, background: '#fff' }}>{c}</option>)
+        )}
+      </select>
+      <ChevronDown size={11} className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2" style={{ color }} />
+    </div>
+  );
+}
+
+function CategoryColorPicker({ current, onChange }) {
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      {PRESET_SWATCHES.map((c) => (
+        <button
+          key={c}
+          onClick={() => onChange(c)}
+          title={c}
+          className="rounded-full flex-shrink-0"
+          style={{
+            width: 18, height: 18, background: c,
+            boxShadow: current.toLowerCase() === c.toLowerCase() ? `0 0 0 2px #fff, 0 0 0 3.5px ${COLORS.ink}` : 'none',
+          }}
+        />
+      ))}
+      <label
+        className="relative rounded-full flex-shrink-0 flex items-center justify-center cursor-pointer overflow-hidden"
+        style={{ width: 18, height: 18, border: `1.5px dashed ${COLORS.inkSoft}` }}
+        title="Custom color"
+      >
+        <Palette size={10} style={{ color: COLORS.inkSoft, pointerEvents: 'none' }} />
+        <input
+          type="color"
+          value={current}
+          onChange={(e) => onChange(e.target.value)}
+          className="absolute inset-0 opacity-0 cursor-pointer"
+        />
+      </label>
+    </div>
+  );
+}
+
+function AmountEditCell({ value, type, onCommit, onToggleType }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { setText(String(value)); }, [value]);
+  const color = type === 'income' ? COLORS.teal : COLORS.coral;
+
+  function commit() {
+    const num = Math.abs(parseFloat(text)) || 0;
+    setText(String(num));
+    if (num !== value) onCommit(num);
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <button
+        type="button"
+        onClick={onToggleType}
+        className="font-semibold text-sm rounded px-0.5"
+        style={{ color }}
+        title={type === 'income' ? 'Income — click to mark as expense' : 'Expense — click to mark as income'}
+      >
+        {type === 'income' ? '+' : '-'}$
+      </button>
+      <input
+        type="number"
+        min="0"
+        step="0.01"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+        className="w-20 text-right font-semibold text-sm rounded-lg px-1.5 py-1 outline-none"
+        style={{ border: `1.5px solid ${COLORS.border}`, color, background: '#fff' }}
+        onFocus={(e) => { e.target.style.borderColor = color; }}
+      />
+    </div>
+  );
+}
+
+function EmptyState({ icon: Icon, title, subtitle }) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-14 px-6">
+      <div className="rounded-full p-4 mb-3" style={{ background: COLORS.violetSoft }}>
+        <Icon size={28} style={{ color: COLORS.violet }} />
+      </div>
+      <p className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>{title}</p>
+      <p className="font-body text-sm mt-1 max-w-xs" style={{ color: COLORS.inkSoft }}>{subtitle}</p>
+    </div>
+  );
+}
+
+function TextInput(props) {
+  return (
+    <input
+      {...props}
+      className={`w-full rounded-xl px-3 py-2 text-sm font-body outline-none focus:ring-2 ${props.className || ''}`}
+      style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink, ...props.style }}
+      onFocus={(e) => { e.target.style.borderColor = COLORS.violet; props.onFocus && props.onFocus(e); }}
+      onBlur={(e) => { e.target.style.borderColor = COLORS.border; props.onBlur && props.onBlur(e); }}
+    />
+  );
+}
+
+function Select(props) {
+  return (
+    <select
+      {...props}
+      className={`w-full rounded-xl px-3 py-2 text-sm font-body outline-none ${props.className || ''}`}
+      style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink, background: '#fff', ...props.style }}
+    >
+      {props.children}
+    </select>
+  );
+}
+
+function PrimaryButton({ children, onClick, style, type = 'button', disabled }) {
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className="inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-semibold font-body text-white transition-transform active:scale-95 disabled:opacity-50"
+      style={{ background: `linear-gradient(135deg, ${COLORS.violet}, #6446E0)`, boxShadow: '0 3px 10px rgba(124,92,252,0.35)', ...style }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function GhostButton({ children, onClick, style }) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold font-body transition-colors"
+      style={{ color: COLORS.violet, background: COLORS.violetSoft, ...style }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ---------------------------------- month nav ---------------------------------- */
+
+function MonthNav({ month, setMonth }) {
+  return (
+    <div className="flex items-center gap-2">
+      <button onClick={() => setMonth(shiftMonth(month, -1))} className="rounded-full p-1.5 hover:bg-white/60" style={{ color: COLORS.inkSoft }}>
+        <ChevronLeft size={18} />
+      </button>
+      <span className="font-display font-semibold text-sm sm:text-base" style={{ color: COLORS.ink, minWidth: 130, textAlign: 'center' }}>
+        {monthLabel(month)}
+      </span>
+      <button onClick={() => setMonth(shiftMonth(month, 1))} className="rounded-full p-1.5 hover:bg-white/60" style={{ color: COLORS.inkSoft }}>
+        <ChevronRight size={18} />
+      </button>
+    </div>
+  );
+}
+
+/* ---------------------------------- Dashboard ---------------------------------- */
+
+function DashboardView({ transactions, budgets, bills, goals, month, setMonth, setTab, accounts, goToLedger }) {
+  const categoryColors = React.useContext(CategoryColorContext);
+  const [hiddenChartCats, setHiddenChartCats] = useState([]);
+  const [showChartFilter, setShowChartFilter] = useState(false);
+  const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
+  const accountsById = useMemo(() => indexById(accounts), [accounts]);
+  const monthTx = useMemo(() => transactions.filter((t) => t.date.startsWith(month)), [transactions, month]);
+  const income = monthTx.filter((t) => t.type === 'income' && !t.excludeFromTotals).reduce((s, t) => s + t.amount, 0);
+  const expenseTx = monthTx.filter((t) => t.type === 'expense' && !t.excludeFromTotals);
+  const expense = expenseTx.reduce((s, t) => s + nonBucketAmount(t, bucketNameSet), 0);
+  const billsExpense = expenseTx
+    .filter((t) => paymentSourceFor(t, accountsById) === 'bank')
+    .reduce((s, t) => s + nonBucketAmount(t, bucketNameSet), 0);
+  const cardExpense = expenseTx
+    .filter((t) => paymentSourceFor(t, accountsById) === 'card')
+    .reduce((s, t) => s + nonBucketAmount(t, bucketNameSet), 0);
+  const net = income - expense;
+  const totalSaved = goals.reduce((s, g) => s + (g.saved || 0), 0);
+  const realSavingsTotal = (accounts || [])
+    .filter(isSavingsAccount)
+    .reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const plannedBudgetTotal = Object.values(budgets).reduce((s, limit) => s + (Number(limit) || 0), 0);
+
+  const byCategory = {};
+  expenseTx.forEach((t) => {
+    if (t.splits && t.splits.length) {
+      t.splits.forEach((s) => {
+        if (bucketNameSet.has(s.category)) return;
+        byCategory[s.category] = (byCategory[s.category] || 0) + s.amount;
+      });
+    } else if (!bucketNameSet.has(t.category)) {
+      byCategory[t.category] = (byCategory[t.category] || 0) + t.amount;
+    }
+  });
+  const pieData = Object.entries(byCategory).map(([name, value]) => ({ name, value }));
+  const visiblePieData = pieData.filter((d) => !hiddenChartCats.includes(d.name));
+
+  function toggleChartCat(cat) {
+    setHiddenChartCats((prev) => (prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]));
+  }
+
+  const budgetRows = Object.entries(budgets).map(([cat, limit]) => ({
+    cat, limit, spent: byCategory[cat] || 0,
+  })).sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1))).slice(0, 4);
+
+  const unpaidBills = bills
+    .filter((b) => !(b.paidMonths || []).includes(month))
+    .sort((a, b) => a.dueDay - b.dueDay);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>How this month's looking</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>A snapshot of where things stand.</p>
+        </div>
+        <MonthNav month={month} setMonth={setMonth} />
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <Card onClick={() => goToLedger('income', 'All')}>
+          <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.teal }}>
+            <TrendingUp size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Income</span>
+          </div>
+          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(income)}</p>
+        </Card>
+        <Card onClick={() => goToLedger('expense', 'All')}>
+          <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.coral }}>
+            <TrendingDown size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Expenses</span>
+          </div>
+          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(expense)}</p>
+          <div className="flex items-center gap-3 mt-1.5 pt-1.5" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); goToLedger('expense', 'bank'); }}
+              className="flex items-center gap-1 hover:underline"
+              style={{ color: COLORS.inkSoft }}
+            >
+              <Landmark size={11} />
+              <span className="font-body text-xs">{formatCurrency(billsExpense)}</span>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); goToLedger('expense', 'card'); }}
+              className="flex items-center gap-1 hover:underline"
+              style={{ color: COLORS.inkSoft }}
+            >
+              <CreditCard size={11} />
+              <span className="font-body text-xs">{formatCurrency(cardExpense)}</span>
+            </button>
+          </div>
+        </Card>
+        <Card onClick={() => goToLedger('All', 'All')}>
+          <div className="flex items-center gap-2 mb-1" style={{ color: net >= 0 ? COLORS.violet : COLORS.coral }}>
+            <Wallet size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Net</span>
+          </div>
+          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(net)}</p>
+        </Card>
+        <Card onClick={() => setTab('savings')}>
+          <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.gold }}>
+            <PiggyBank size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Total saved</span>
+          </div>
+          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(realSavingsTotal || totalSaved)}</p>
+          {realSavingsTotal > 0 && (
+            <div className="flex items-center gap-1.5 mt-1.5 pt-1.5" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+              <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Buckets: {formatCurrency(totalSaved)}</span>
+              {Math.round((realSavingsTotal - totalSaved) * 100) !== 0 && (
+                <Flame size={11} style={{ color: COLORS.gold }} />
+              )}
+            </div>
+          )}
+        </Card>
+        <Card onClick={() => setTab('budgets')}>
+          <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.violet }}>
+            <Target size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Planned budget</span>
+          </div>
+          <p className="font-display font-bold text-xl" style={{ color: COLORS.ink }}>{formatCurrency(plannedBudgetTotal)}</p>
+        </Card>
+      </div>
+
+      <div className="grid lg:grid-cols-5 gap-5">
+        <Card className="lg:col-span-2">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Spending by category</h3>
+            {pieData.length > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowChartFilter((v) => !v)}
+                  className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold font-body"
+                  style={{ background: hiddenChartCats.length > 0 ? COLORS.violetSoft : COLORS.bg, color: hiddenChartCats.length > 0 ? COLORS.violet : COLORS.inkSoft }}
+                >
+                  <Settings2 size={12} />
+                  {hiddenChartCats.length > 0 ? `${pieData.length - hiddenChartCats.length}/${pieData.length}` : 'Filter'}
+                  <ChevronDown size={12} />
+                </button>
+                {showChartFilter && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setShowChartFilter(false)} />
+                    <div
+                      className="absolute right-0 mt-1.5 rounded-xl p-1.5 z-20"
+                      style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, boxShadow: '0 8px 24px rgba(33,31,61,0.15)', width: 190, maxHeight: 240, overflowY: 'auto' }}
+                    >
+                      {pieData.map((entry) => {
+                        const hidden = hiddenChartCats.includes(entry.name);
+                        const c = categoryColor(entry.name, categoryColors);
+                        return (
+                          <div
+                            key={entry.name}
+                            onClick={() => toggleChartCat(entry.name)}
+                            className="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer font-body text-xs select-none"
+                            style={{ color: hidden ? COLORS.inkSoft : COLORS.ink }}
+                          >
+                            <span
+                              className="flex items-center justify-center flex-shrink-0"
+                              style={{
+                                width: 14, height: 14, borderRadius: 4,
+                                border: `1.5px solid ${hidden ? COLORS.border : c}`,
+                                background: hidden ? 'transparent' : c,
+                              }}
+                            >
+                              {!hidden && <Check size={10} style={{ color: '#fff' }} strokeWidth={3} />}
+                            </span>
+                            <span style={{ width: 7, height: 7, borderRadius: 999, background: hidden ? COLORS.inkSoft : c, display: 'inline-block', flexShrink: 0 }} />
+                            <span className="truncate">{entry.name}</span>
+                          </div>
+                        );
+                      })}
+                      {hiddenChartCats.length > 0 && (
+                        <button
+                          onClick={() => setHiddenChartCats([])}
+                          className="w-full text-left font-body text-xs font-semibold px-2 py-1.5 mt-0.5 rounded-lg"
+                          style={{ color: COLORS.violet }}
+                        >
+                          Show all
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          {pieData.length === 0 ? (
+            <EmptyState icon={Receipt} title="Nothing logged yet" subtitle="Add a transaction to see the breakdown here." />
+          ) : visiblePieData.length === 0 ? (
+            <div style={{ width: '100%', height: 220 }} className="flex items-center justify-center">
+              <p className="font-body text-xs text-center max-w-[160px]" style={{ color: COLORS.inkSoft }}>
+                Every category is hidden &mdash; open the filter to show one again.
+              </p>
+            </div>
+          ) : (
+            <div style={{ width: '100%', height: 220 }}>
+              <ResponsiveContainer>
+                <PieChart>
+                  <Pie data={visiblePieData} dataKey="value" nameKey="name" innerRadius={50} outerRadius={80} paddingAngle={3}>
+                    {visiblePieData.map((entry, i) => <Cell key={i} fill={categoryColor(entry.name, categoryColors)} />)}
+                  </Pie>
+                  <Tooltip formatter={(v) => formatCurrency(v)} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </Card>
+
+        <Card className="lg:col-span-3">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Budget check-in</h3>
+            <button onClick={() => setTab('budgets')} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>Manage &rarr;</button>
+          </div>
+          {budgetRows.length === 0 ? (
+            <EmptyState icon={PiggyBank} title="No budgets set" subtitle="Set monthly limits per category to track progress." />
+          ) : (
+            <div className="space-y-3">
+              {budgetRows.map((r) => (
+                <div key={r.cat}>
+                  <div className="flex justify-between text-sm font-body mb-1">
+                    <CategoryBadge cat={r.cat} />
+                    <span style={{ color: COLORS.inkSoft }}>{formatCurrency(r.spent)} / {formatCurrency(r.limit)}</span>
+                  </div>
+                  <JarBar pct={r.limit ? (r.spent / r.limit) * 100 : 0} />
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Savings buckets</h3>
+          <button onClick={() => setTab('savings')} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>Manage &rarr;</button>
+        </div>
+        {goals.length === 0 ? (
+          <EmptyState icon={Coins} title="No savings buckets yet" subtitle="Create one on the Savings tab to see it charted here." />
+        ) : (
+          <div style={{ width: '100%', height: 240 }}>
+            <ResponsiveContainer>
+              <BarChart data={goals.map((g) => ({ name: g.name, saved: g.saved || 0, target: g.target || 0 }))} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} width={55} />
+                <Tooltip formatter={(v) => formatCurrency(v)} />
+                <Legend wrapperStyle={{ fontSize: 12, fontFamily: 'Inter, sans-serif' }} />
+                <Bar dataKey="saved" name="Saved" fill={COLORS.violet} radius={[6, 6, 0, 0]} maxBarSize={40} />
+                <Bar dataKey="target" name="Target" fill={COLORS.violetSoft} stroke={COLORS.violet} strokeWidth={1} radius={[6, 6, 0, 0]} maxBarSize={40} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Upcoming bills</h3>
+          <button onClick={() => setTab('settings')} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>Manage &rarr;</button>
+        </div>
+        {unpaidBills.length === 0 ? (
+          <EmptyState icon={CalendarClock} title="All caught up" subtitle="No unpaid bills this month." />
+        ) : (
+          <div className="grid sm:grid-cols-2 gap-2">
+            {unpaidBills.slice(0, 6).map((b) => (
+              <div key={b.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                <div>
+                  <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{b.name}</p>
+                  <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Due day {b.dueDay}</p>
+                </div>
+                <span className="font-display font-semibold text-sm" style={{ color: COLORS.ink }}>{formatCurrency(b.amount)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/* ---------------------------------- Ledger ---------------------------------- */
+
+function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts, catFilter, setCatFilter, sourceFilter, setSourceFilter, typeFilter, setTypeFilter, lastSyncAt, bucketFilter, setBucketFilter, renameCategory, categoryColors, updateCategoryColors }) {
+  const [search, setSearch] = useState('');
+  const [amountMin, setAmountMin] = useState('');
+  const [amountMax, setAmountMax] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [splitTarget, setSplitTarget] = useState(null);
+  const [splitRows, setSplitRows] = useState([]);
+  const [remainderCategory, setRemainderCategory] = useState('Other');
+  const [expandedSplits, setExpandedSplits] = useState({});
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [allocateTarget, setAllocateTarget] = useState(null);
+  const [allocateRows, setAllocateRows] = useState([]);
+  const [newBucketName, setNewBucketName] = useState('');
+  const [allocateDirection, setAllocateDirection] = useState('deposit');
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+
+  const accountsById = useMemo(() => indexById(accounts), [accounts]);
+  const savingsAccountsList = useMemo(
+    () => (accounts || []).filter(isSavingsAccount),
+    [accounts]
+  );
+  const bucketGroups = useMemo(() => {
+    const linkedIds = new Set(savingsAccountsList.map((a) => a.id));
+    const groups = savingsAccountsList
+      .map((a) => ({
+        id: a.id,
+        label: `${a.name}${a.mask ? ` ••${a.mask}` : ''}`,
+        buckets: goals.filter((g) => g.accountId === a.id),
+      }))
+      .filter((grp) => grp.buckets.length > 0);
+    const unlinked = goals.filter((g) => !g.accountId || !linkedIds.has(g.accountId));
+    if (unlinked.length) groups.push({ id: 'unlinked', label: 'Not linked to an account', buckets: unlinked });
+    return groups;
+  }, [savingsAccountsList, goals]);
+  function togglePaymentSource(id) {
+    const tx = transactions.find((t) => t.id === id);
+    if (!tx) return;
+    const current = paymentSourceFor(tx, accountsById);
+    const next = current === 'card' ? 'bank' : 'card';
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, paymentSource: next } : t)));
+  }
+
+  function toggleExcluded(id) {
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, excludeFromTotals: !t.excludeFromTotals } : t)));
+  }
+
+  const connectedAccountIds = useMemo(() => new Set((accounts || []).map((a) => a.id)), [accounts]);
+  const orphanedTransactions = useMemo(
+    () => transactions
+      .filter((t) => t.plaidAccountId && !connectedAccountIds.has(t.plaidAccountId))
+      .sort((a, b) => b.date.localeCompare(a.date)),
+    [transactions, connectedAccountIds]
+  );
+  const [showOrphanReview, setShowOrphanReview] = useState(false);
+  const [orphanSelected, setOrphanSelected] = useState(() => new Set());
+
+  function toggleOrphanSelected(id) {
+    setOrphanSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function deleteSelectedOrphans() {
+    if (orphanSelected.size === 0) return;
+    if (!window.confirm(`Permanently delete ${orphanSelected.size} transaction(s)? This can't be undone.`)) return;
+    updateTransactions(transactions.filter((t) => !orphanSelected.has(t.id)));
+    setOrphanSelected(new Set());
+    setShowOrphanReview(false);
+  }
+
+  function toggleSelected(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  function deleteSelected() {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Delete ${selectedIds.size} selected transaction(s)? This can't be undone.`)) return;
+    updateTransactions(transactions.filter((t) => !selectedIds.has(t.id)));
+    setSelectedIds(new Set());
+  }
+
+  function markSelectedAsTransfer(exclude) {
+    if (selectedIds.size === 0) return;
+    updateTransactions(transactions.map((t) => (selectedIds.has(t.id) ? { ...t, excludeFromTotals: exclude } : t)));
+    setSelectedIds(new Set());
+  }
+
+  function allocationDirection(t) {
+    return t.savingsDirection || (t.type === 'income' ? 'withdraw' : 'deposit');
+  }
+
+  function isAllocationApplied(t) {
+    return !!(t.savingsAllocations && t.savingsAllocations.length && t.savingsTransferConfirmed !== false);
+  }
+
+  function rememberCategory(description, category) {
+    const exactKey = normalizeDescription(description);
+    if (!exactKey || !category) return;
+    const token = merchantToken(description);
+    updateCategoryMemory({
+      exact: { ...categoryMemory.exact, [exactKey]: category },
+      merchant: token ? { ...categoryMemory.merchant, [token]: category } : categoryMemory.merchant,
+    });
+  }
+
+  const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
+
+  const allCategories = useMemo(() => {
+    const set = new Set([...DEFAULT_EXPENSE_CATEGORIES, ...Object.keys(budgets), 'Income']);
+    transactions.forEach((t) => { if (!bucketNameSet.has(t.category)) set.add(t.category); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [budgets, transactions, bucketNameSet]);
+
+  const visibleCategories = useMemo(
+    () => allCategories.filter((c) => !hiddenCategories.includes(c)),
+    [allCategories, hiddenCategories]
+  );
+
+  function categoryOptionsFor(current) {
+    if (visibleCategories.includes(current)) return visibleCategories;
+    if (bucketCategoryNames.includes(current)) return visibleCategories;
+    return [...visibleCategories, current];
+  }
+
+  const [form, setForm] = useState({ date: todayStr(), description: '', category: 'Groceries', amount: '', type: 'expense' });
+
+  const hasCustomDateRange = !!(dateFrom || dateTo);
+
+  const filtered = useMemo(() => {
+    if (bucketFilter) {
+      return transactions
+        .filter((t) => t.savingsAllocations && t.savingsAllocations.some((a) => a.bucketId === bucketFilter))
+        .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
+        .sort((a, b) => b.date.localeCompare(a.date));
+    }
+    return transactions
+      .filter((t) => (hasCustomDateRange
+        ? (!dateFrom || t.date >= dateFrom) && (!dateTo || t.date <= dateTo)
+        : t.date.startsWith(month)))
+      .filter((t) => catFilter === 'All' || t.category === catFilter || (t.splits && t.splits.some((s) => s.category === catFilter)))
+      .filter((t) => sourceFilter === 'All' || paymentSourceFor(t, accountsById) === sourceFilter)
+      .filter((t) => typeFilter === 'All' || t.type === typeFilter)
+      .filter((t) => !amountMin || t.amount >= parseFloat(amountMin))
+      .filter((t) => !amountMax || t.amount <= parseFloat(amountMax))
+      .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [transactions, month, catFilter, sourceFilter, typeFilter, bucketFilter, accountsById, search, dateFrom, dateTo, hasCustomDateRange, amountMin, amountMax]);
+
+  const filteredSummary = useMemo(() => {
+    let countedIncome = 0, countedExpense = 0, excludedTotal = 0, excludedCount = 0;
+    filtered.forEach((t) => {
+      if (t.excludeFromTotals) {
+        excludedTotal += t.amount;
+        excludedCount++;
+      } else if (t.type === 'income') {
+        countedIncome += t.amount;
+      } else {
+        countedExpense += t.amount;
+      }
+    });
+    return { countedIncome, countedExpense, excludedTotal, excludedCount };
+  }, [filtered]);
+
+  function addTransaction() {
+    if (!form.description.trim() || !form.amount) return;
+    const tx = {
+      id: uid(), date: form.date, description: form.description.trim(),
+      category: form.type === 'income' ? 'Income' : form.category,
+      amount: Math.abs(parseFloat(form.amount)) || 0, type: form.type,
+    };
+    updateTransactions([tx, ...transactions]);
+    if (tx.type === 'expense') rememberCategory(tx.description, tx.category);
+    setForm({ date: todayStr(), description: '', category: 'Groceries', amount: '', type: 'expense' });
+    setShowAdd(false);
+  }
+
+  function removeTransaction(id) {
+    const tx = transactions.find((t) => t.id === id);
+    if (tx && isAllocationApplied(tx)) {
+      const oldSign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
+      applyAllocationDelta(tx.savingsAllocations, oldSign, [], 1);
+    }
+    updateTransactions(transactions.filter((t) => t.id !== id));
+  }
+
+  const bucketCategoryNames = useMemo(() => goals.map((g) => g.name), [goals]);
+
+  function updateCategory(id, category) {
+    const tx = transactions.find((t) => t.id === id);
+    if (tx) rememberCategory(tx.description, category);
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, category } : t)));
+  }
+
+  function updateCategoryOrAllocate(id, newValue) {
+    const tx = transactions.find((t) => t.id === id);
+    if (!tx) return;
+    const newBucket = goals.find((g) => g.name === newValue);
+    const wasApplied = isAllocationApplied(tx);
+
+    if (newBucket) {
+      // Reverse any previously-applied allocation before switching categories
+      if (wasApplied) {
+        const oldSign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
+        applyAllocationDelta(tx.savingsAllocations, oldSign, [], 1);
+      }
+      const newAlloc = [{ id: uid(), bucketId: newBucket.id, amount: tx.amount }];
+      updateTransactions(transactions.map((t) => (
+        t.id === id
+          ? { ...t, category: newValue, savingsAllocations: newAlloc, savingsDirection: 'withdraw', savingsTransferConfirmed: false }
+          : t
+      )));
+    } else if (tx.savingsAllocations) {
+      if (wasApplied) {
+        const oldSign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
+        applyAllocationDelta(tx.savingsAllocations, oldSign, [], 1);
+      }
+      rememberCategory(tx.description, newValue);
+      updateTransactions(transactions.map((t) => (
+        t.id === id ? { ...t, category: newValue, savingsAllocations: undefined, savingsDirection: undefined, savingsTransferConfirmed: undefined } : t
+      )));
+    } else {
+      rememberCategory(tx.description, newValue);
+      updateTransactions(transactions.map((t) => (t.id === id ? { ...t, category: newValue } : t)));
+    }
+  }
+
+  function toggleTransferConfirmed(id) {
+    const tx = transactions.find((t) => t.id === id);
+    if (!tx || !tx.savingsAllocations || !tx.savingsAllocations.length) return;
+    const sign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
+    const nowConfirmed = !isAllocationApplied(tx);
+    if (nowConfirmed) {
+      applyAllocationDelta([], 1, tx.savingsAllocations, sign);
+    } else {
+      applyAllocationDelta(tx.savingsAllocations, sign, [], 1);
+    }
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, savingsTransferConfirmed: nowConfirmed } : t)));
+  }
+
+  function updateAmount(id, amount) {
+    const tx = transactions.find((t) => t.id === id);
+    if (tx && tx.savingsAllocations && tx.savingsAllocations.length && bucketCategoryNames.includes(tx.category)) {
+      const newAlloc = tx.savingsAllocations.map((a) => ({ ...a, amount }));
+      if (isAllocationApplied(tx)) {
+        const sign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
+        applyAllocationDelta(tx.savingsAllocations, sign, newAlloc, sign);
+      }
+      updateTransactions(transactions.map((t) => (t.id === id ? { ...t, amount, savingsAllocations: newAlloc } : t)));
+      return;
+    }
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, amount } : t)));
+  }
+
+  function updateType(id) {
+    const tx = transactions.find((t) => t.id === id);
+    if (!tx) return;
+    const newType = tx.type === 'income' ? 'expense' : 'income';
+    const newCategory = newType === 'income'
+      ? 'Income'
+      : (tx.category === 'Income' ? 'Other' : tx.category);
+    if (newType === 'expense') rememberCategory(tx.description, newCategory);
+    updateTransactions(transactions.map((t) => (
+      t.id === id ? { ...t, type: newType, category: newCategory } : t
+    )));
+  }
+
+  function updateSplitCategory(txId, splitId, category) {
+    const tx = transactions.find((t) => t.id === txId);
+    if (!tx || !tx.splits) return;
+    const newSplits = tx.splits.map((s) => (s.id === splitId ? { ...s, category } : s));
+
+    const newSavingsAllocations = newSplits
+      .filter((s) => bucketNameSet.has(s.category))
+      .map((s) => {
+        const bucket = goals.find((g) => g.name === s.category);
+        return bucket ? { id: uid(), bucketId: bucket.id, amount: s.amount } : null;
+      })
+      .filter(Boolean);
+
+    const wasApplied = isAllocationApplied(tx);
+    const oldSign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
+    applyAllocationDelta(wasApplied ? tx.savingsAllocations : [], oldSign, [], 1);
+
+    if (!bucketNameSet.has(category)) rememberCategory(tx.description, category);
+
+    updateTransactions(transactions.map((t) => (
+      t.id === txId
+        ? {
+            ...t,
+            splits: newSplits,
+            savingsAllocations: newSavingsAllocations.length ? newSavingsAllocations : undefined,
+            savingsDirection: newSavingsAllocations.length ? 'withdraw' : undefined,
+            savingsTransferConfirmed: newSavingsAllocations.length ? false : undefined,
+          }
+        : t
+    )));
+  }
+
+  function openSplitModal(t) {
+    setSplitTarget(t);
+    if (t.splits && t.splits.length) {
+      setSplitRows(t.splits.slice(0, -1).map((s) => ({ id: uid(), category: s.category, amount: String(s.amount) })));
+      setRemainderCategory(t.splits[t.splits.length - 1].category);
+    } else {
+      setSplitRows([]);
+      setRemainderCategory(t.category);
+    }
+  }
+
+  function addSplitRow() {
+    setSplitRows((rows) => [...rows, { id: uid(), category: 'Other', amount: '' }]);
+  }
+
+  function updateSplitRow(id, field, value) {
+    setSplitRows((rows) => rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  }
+
+  function removeSplitRow(id) {
+    setSplitRows((rows) => rows.filter((r) => r.id !== id));
+  }
+
+  const explicitSum = splitRows.reduce((s, r) => s + (Math.abs(parseFloat(r.amount)) || 0), 0);
+  const remaining = splitTarget ? Math.round((splitTarget.amount - explicitSum) * 100) / 100 : 0;
+
+  function confirmSplit() {
+    if (!splitTarget) return;
+    const explicit = splitRows
+      .map((r) => ({ category: r.category, amount: Math.abs(parseFloat(r.amount)) || 0 }))
+      .filter((r) => r.amount > 0);
+    if (explicit.length === 0 || remaining < 0) return;
+    const finalSplits = remaining > 0
+      ? [...explicit, { category: remainderCategory, amount: remaining }]
+      : explicit;
+    const withIds = finalSplits.map((s) => ({ id: uid(), ...s }));
+
+    // Route any split rows pointed at a savings bucket into savingsAllocations instead of budget categories.
+    // These start pending (unconfirmed) until the "Transferred" checkbox is checked.
+    const newSavingsAllocations = withIds
+      .filter((s) => bucketNameSet.has(s.category))
+      .map((s) => {
+        const bucket = goals.find((g) => g.name === s.category);
+        return bucket ? { id: uid(), bucketId: bucket.id, amount: s.amount } : null;
+      })
+      .filter(Boolean);
+
+    const wasApplied = isAllocationApplied(splitTarget);
+    const oldSign = allocationDirection(splitTarget) === 'withdraw' ? -1 : 1;
+    applyAllocationDelta(wasApplied ? splitTarget.savingsAllocations : [], oldSign, [], 1);
+
+    updateTransactions(transactions.map((t) => (
+      t.id === splitTarget.id
+        ? {
+            ...t,
+            splits: withIds,
+            savingsAllocations: newSavingsAllocations.length ? newSavingsAllocations : undefined,
+            savingsDirection: newSavingsAllocations.length ? 'withdraw' : undefined,
+            savingsTransferConfirmed: newSavingsAllocations.length ? false : undefined,
+          }
+        : t
+    )));
+    setExpandedSplits((prev) => ({ ...prev, [splitTarget.id]: true }));
+    setSplitTarget(null);
+  }
+
+  function removeSplit(id) {
+    const tx = transactions.find((t) => t.id === id);
+    if (tx && isAllocationApplied(tx)) {
+      const oldSign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
+      applyAllocationDelta(tx.savingsAllocations, oldSign, [], 1);
+    }
+    updateTransactions(transactions.map((t) => (
+      t.id === id ? { ...t, splits: undefined, savingsAllocations: undefined, savingsDirection: undefined, savingsTransferConfirmed: undefined } : t
+    )));
+  }
+
+  function openAllocateModal(t) {
+    setAllocateTarget(t);
+    const existing = (t.savingsAllocations || []).map((a) => ({ id: uid(), bucketId: a.bucketId, amount: String(a.amount) }));
+    setAllocateRows(existing.length ? existing : (goals.length ? [{ id: uid(), bucketId: goals[0].id, amount: String(t.amount) }] : []));
+    setAllocateDirection(allocationDirection(t));
+    setNewBucketName('');
+  }
+
+  function addAllocateRow() {
+    setAllocateRows((rows) => [...rows, { id: uid(), bucketId: goals[0] ? goals[0].id : '', amount: '' }]);
+  }
+
+  function updateAllocateRow(id, field, value) {
+    setAllocateRows((rows) => rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  }
+
+  function removeAllocateRow(id) {
+    setAllocateRows((rows) => rows.filter((r) => r.id !== id));
+  }
+
+  function createBucketInline() {
+    if (!newBucketName.trim()) return;
+    const bucket = { id: uid(), name: newBucketName.trim(), saved: 0, target: null };
+    updateGoals([...goals, bucket]);
+    setAllocateRows((rows) => [...rows, { id: uid(), bucketId: bucket.id, amount: '' }]);
+    setNewBucketName('');
+  }
+
+  const allocatedSum = allocateRows.reduce((s, r) => s + (Math.abs(parseFloat(r.amount)) || 0), 0);
+  const allocateOverBudget = allocateTarget ? allocatedSum > allocateTarget.amount + 0.001 : false;
+
+  function applyAllocationDelta(oldAllocations, oldSign, newAllocations, newSign) {
+    const oldByBucket = {};
+    (oldAllocations || []).forEach((a) => { oldByBucket[a.bucketId] = (oldByBucket[a.bucketId] || 0) + a.amount; });
+    const newByBucket = {};
+    newAllocations.forEach((a) => { newByBucket[a.bucketId] = (newByBucket[a.bucketId] || 0) + a.amount; });
+    const touched = new Set([...Object.keys(oldByBucket), ...Object.keys(newByBucket)]);
+    updateGoals(goals.map((g) => {
+      if (!touched.has(g.id)) return g;
+      const delta = newSign * (newByBucket[g.id] || 0) - oldSign * (oldByBucket[g.id] || 0);
+      return { ...g, saved: Math.max(0, g.saved + delta) };
+    }));
+  }
+
+  function confirmAllocate() {
+    if (!allocateTarget || allocateOverBudget) return;
+    const clean = allocateRows
+      .filter((r) => r.bucketId && (Math.abs(parseFloat(r.amount)) || 0) > 0)
+      .map((r) => ({ id: uid(), bucketId: r.bucketId, amount: Math.abs(parseFloat(r.amount)) || 0 }));
+
+    const wasApplied = isAllocationApplied(allocateTarget);
+    const oldSign = allocationDirection(allocateTarget) === 'withdraw' ? -1 : 1;
+    const newSign = allocateDirection === 'withdraw' ? -1 : 1;
+    applyAllocationDelta(wasApplied ? allocateTarget.savingsAllocations : [], oldSign, clean, newSign);
+    updateTransactions(transactions.map((t) => (
+      t.id === allocateTarget.id
+        ? { ...t, savingsAllocations: clean.length ? clean : undefined, savingsDirection: clean.length ? allocateDirection : undefined, savingsTransferConfirmed: undefined }
+        : t
+    )));
+    setAllocateTarget(null);
+  }
+
+  function removeAllocation() {
+    if (!allocateTarget) return;
+    const wasApplied = isAllocationApplied(allocateTarget);
+    const oldSign = allocationDirection(allocateTarget) === 'withdraw' ? -1 : 1;
+    applyAllocationDelta(wasApplied ? allocateTarget.savingsAllocations : [], oldSign, [], 1);
+    updateTransactions(transactions.map((t) => (
+      t.id === allocateTarget.id ? { ...t, savingsAllocations: undefined, savingsDirection: undefined, savingsTransferConfirmed: undefined } : t
+    )));
+    setAllocateTarget(null);
+  }
+
+  function bucketName(id) {
+    const b = goals.find((g) => g.id === id);
+    return b ? b.name : 'Deleted bucket';
+  }
+
+  function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const map = detectHeaderMap(results.meta.fields || []);
+        const existingSigs = new Set(transactions.map(txSignature));
+        const seenInBatch = new Set();
+        const rows = results.data
+          .map((r) => rowToTransaction(r, map, categoryMemory))
+          .filter((t) => t.amount > 0)
+          .map((t) => {
+            const sig = txSignature(t);
+            const isDuplicate = existingSigs.has(sig) || seenInBatch.has(sig);
+            seenInBatch.add(sig);
+            return { ...t, _duplicate: isDuplicate, _include: !isDuplicate };
+          });
+        setPreview(rows);
+      },
+    });
+    e.target.value = '';
+  }
+
+  function togglePreviewRow(id) {
+    setPreview((rows) => rows.map((r) => (r.id === id ? { ...r, _include: !r._include } : r)));
+  }
+
+  function confirmImport() {
+    if (preview && preview.length) {
+      const toImport = preview.filter((t) => t._include).map(({ _memoryMatch, _duplicate, _include, ...t }) => t);
+      if (toImport.length) updateTransactions([...toImport, ...transactions]);
+    }
+    setPreview(null);
+    setShowImport(false);
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Ledger</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>
+            {bucketFilter ? 'Every transfer tied to this bucket, across all time.' : 'Every dollar in and out, filterable by month.'}
+          </p>
+        </div>
+        {bucketFilter ? (
+          <button
+            onClick={() => setBucketFilter(null)}
+            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold font-body"
+            style={{ background: COLORS.violetSoft, color: COLORS.violet }}
+          >
+            <PiggyBank size={14} /> {goals.find((g) => g.id === bucketFilter)?.name || 'Bucket'} <X size={13} />
+          </button>
+        ) : hasCustomDateRange ? (
+          <button
+            onClick={() => { setDateFrom(''); setDateTo(''); }}
+            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold font-body"
+            style={{ background: COLORS.violetSoft, color: COLORS.violet }}
+          >
+            {dateFrom || '\u2026'} &rarr; {dateTo || '\u2026'} <X size={13} />
+          </button>
+        ) : (
+          <MonthNav month={month} setMonth={setMonth} />
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[180px]">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: COLORS.inkSoft }} />
+          <TextInput placeholder="Search descriptions..." value={search} onChange={(e) => setSearch(e.target.value)} style={{ paddingLeft: 32 }} />
+        </div>
+        <Select value={catFilter} onChange={(e) => setCatFilter(e.target.value)} style={{ width: 170 }}>
+          <option value="All">All categories</option>
+          <optgroup label="Categories">
+            {visibleCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </optgroup>
+          {bucketCategoryNames.length > 0 && (
+            <optgroup label="Savings buckets">
+              {bucketCategoryNames.map((c) => <option key={c} value={c}>{`\uD83D\uDC37 ${c}`}</option>)}
+            </optgroup>
+          )}
+        </Select>
+        <Select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} style={{ width: 150 }}>
+          <option value="All">Bank + Card</option>
+          <option value="bank">Bank (bills)</option>
+          <option value="card">Credit card</option>
+        </Select>
+        <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ width: 140 }}>
+          <option value="All">Income + Expense</option>
+          <option value="income">Income only</option>
+          <option value="expense">Expense only</option>
+        </Select>
+        <GhostButton onClick={() => setShowMoreFilters((v) => !v)}>
+          {showMoreFilters ? <ChevronUp size={15} /> : <ChevronDown size={15} />} Amount &amp; date
+        </GhostButton>
+        <GhostButton onClick={() => setShowCategoryManager(true)}><Settings2 size={15} /> Categories</GhostButton>
+        <GhostButton onClick={() => setShowImport(true)}><Upload size={15} /> Import CSV</GhostButton>
+        {orphanedTransactions.length > 0 && (
+          <GhostButton onClick={() => setShowOrphanReview(true)} style={{ color: COLORS.coral, background: '#FFE9E9' }}>
+            <Trash2 size={15} /> Review {orphanedTransactions.length} leftover
+          </GhostButton>
+        )}
+        <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> Add entry</PrimaryButton>
+      </div>
+
+      {showMoreFilters && (
+        <Card>
+          <div className="grid sm:grid-cols-4 gap-3 items-end">
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Min amount</label>
+              <TextInput type="number" min="0" step="0.01" placeholder="$0.00" value={amountMin} onChange={(e) => setAmountMin(e.target.value)} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Max amount</label>
+              <TextInput type="number" min="0" step="0.01" placeholder="No max" value={amountMax} onChange={(e) => setAmountMax(e.target.value)} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>From date</label>
+              <TextInput type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>To date</label>
+              <TextInput type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            </div>
+          </div>
+          <p className="font-body text-xs mt-2" style={{ color: COLORS.inkSoft }}>
+            {hasCustomDateRange
+              ? 'A date range is set, so it replaces the month selector above until cleared.'
+              : 'Description is filtered by the search box up top; these narrow by amount and date on top of that.'}
+          </p>
+          {(amountMin || amountMax || dateFrom || dateTo) && (
+            <button
+              onClick={() => { setAmountMin(''); setAmountMax(''); setDateFrom(''); setDateTo(''); }}
+              className="font-body text-xs font-semibold mt-2"
+              style={{ color: COLORS.coral }}
+            >
+              Clear these filters
+            </button>
+          )}
+        </Card>
+      )}
+
+      {selectedIds.size > 0 && (
+        <div className="flex items-center justify-between rounded-xl px-4 py-2.5" style={{ background: COLORS.violetSoft }}>
+          <span className="font-body text-sm font-semibold" style={{ color: COLORS.violet }}>{selectedIds.size} selected</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setSelectedIds(new Set())} className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Clear</button>
+            <button
+              onClick={() => markSelectedAsTransfer(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold font-body"
+              style={{ background: '#fff', color: COLORS.violet }}
+            >
+              <Repeat size={13} /> Mark as transfer
+            </button>
+            <button
+              onClick={() => markSelectedAsTransfer(false)}
+              className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold font-body"
+              style={{ background: '#fff', color: COLORS.inkSoft }}
+            >
+              Unmark transfer
+            </button>
+            <button
+              onClick={deleteSelected}
+              className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold font-body text-white"
+              style={{ background: COLORS.coral }}
+            >
+              <Trash2 size={13} /> Delete selected
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showAdd && (
+        <Card>
+          <div className="grid sm:grid-cols-5 gap-3 items-end">
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Date</label>
+              <TextInput type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Description</label>
+              <TextInput placeholder="e.g. Trader Joe's" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Type</label>
+              <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+                <option value="expense">Expense</option>
+                <option value="income">Income</option>
+              </Select>
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Amount</label>
+              <TextInput type="number" step="0.01" min="0" placeholder="0.00" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
+            </div>
+            {form.type === 'expense' && (
+              <div className="sm:col-span-2">
+                <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Category</label>
+                <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                  {visibleCategories.filter((c) => c !== 'Income').map((c) => <option key={c} value={c}>{c}</option>)}
+                </Select>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <PrimaryButton onClick={addTransaction}><Check size={15} /> Save</PrimaryButton>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {filtered.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl px-4 py-2.5" style={{ background: COLORS.bg }}>
+          <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Showing {filtered.length} transaction{filtered.length === 1 ? '' : 's'}:</span>
+          {filteredSummary.countedIncome > 0 && (
+            <span className="font-body text-xs font-semibold" style={{ color: COLORS.teal }}>+{formatCurrency(filteredSummary.countedIncome)} counted income</span>
+          )}
+          {filteredSummary.countedExpense > 0 && (
+            <span className="font-body text-xs font-semibold" style={{ color: COLORS.coral }}>-{formatCurrency(filteredSummary.countedExpense)} counted expense</span>
+          )}
+          {filteredSummary.excludedCount > 0 && (
+            <span className="font-body text-xs font-semibold" style={{ color: COLORS.gold }}>
+              {formatCurrency(filteredSummary.excludedTotal)} excluded ({filteredSummary.excludedCount})
+            </span>
+          )}
+        </div>
+      )}
+
+      <Card style={{ padding: 0 }}>
+        {filtered.length === 0 ? (
+          <EmptyState icon={Receipt} title="No transactions here" subtitle="Add one manually or import a CSV to get started." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm font-body">
+              <thead>
+                <tr style={{ color: COLORS.inkSoft }} className="text-left border-b" >
+                  <th className="pl-4 pr-1 py-2.5" style={{ width: 30 }}>
+                    <div
+                      onClick={() => {
+                        const visibleIds = filtered.map((t) => t.id);
+                        const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+                        setSelectedIds(allSelected ? new Set() : new Set(visibleIds));
+                      }}
+                      className="flex items-center justify-center cursor-pointer"
+                      style={{
+                        width: 14, height: 14, borderRadius: 4,
+                        border: `1.5px solid ${filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id)) ? COLORS.violet : COLORS.border}`,
+                        background: filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id)) ? COLORS.violet : 'transparent',
+                      }}
+                    >
+                      {filtered.length > 0 && filtered.every((t) => selectedIds.has(t.id)) && <Check size={10} style={{ color: '#fff' }} strokeWidth={3} />}
+                    </div>
+                  </th>
+                  <th className="px-4 py-2.5 font-semibold text-xs uppercase tracking-wide">Date</th>
+                  <th className="px-4 py-2.5 font-semibold text-xs uppercase tracking-wide">Description</th>
+                  <th className="px-4 py-2.5 font-semibold text-xs uppercase tracking-wide">Category</th>
+                  <th className="px-4 py-2.5 font-semibold text-xs uppercase tracking-wide text-right">Amount</th>
+                  <th className="px-4 py-2.5"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((t) => (
+                  <React.Fragment key={t.id}>
+                    <tr className="border-b last:border-0" style={{ borderColor: COLORS.border }}>
+                      <td className="pl-4 pr-1 py-2.5">
+                        <div
+                          onClick={() => toggleSelected(t.id)}
+                          className="flex items-center justify-center cursor-pointer"
+                          style={{
+                            width: 14, height: 14, borderRadius: 4,
+                            border: `1.5px solid ${selectedIds.has(t.id) ? COLORS.violet : COLORS.border}`,
+                            background: selectedIds.has(t.id) ? COLORS.violet : 'transparent',
+                          }}
+                        >
+                          {selectedIds.has(t.id) && <Check size={10} style={{ color: '#fff' }} strokeWidth={3} />}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.date}</td>
+                      <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>
+                        {t.description}
+                        {t.addedAt && lastSyncAt && t.addedAt === lastSyncAt && (
+                          <span
+                            className="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-bold font-body ml-1.5"
+                            style={{ background: COLORS.teal, color: '#fff' }}
+                          >
+                            New
+                          </span>
+                        )}
+                        {t.pendingRemoval && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs font-bold font-body ml-1.5"
+                            style={{ background: COLORS.gold, color: '#fff' }}
+                            title="Review this in the Accounts tab"
+                          >
+                            <Flame size={9} /> Needs review
+                          </span>
+                        )}
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {(() => {
+                            const src = paymentSourceFor(t, accountsById);
+                            const isCard = src === 'card';
+                            const Icon = isCard ? CreditCard : Landmark;
+                            const color = isCard ? COLORS.violet : COLORS.gold;
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => togglePaymentSource(t.id)}
+                                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold font-body"
+                                style={{ background: `${color}22`, color }}
+                                title={isCard ? 'Charged to credit card — click to mark as bank/bill' : 'Paid from bank — click to mark as credit card'}
+                              >
+                                <Icon size={11} /> {isCard ? 'Card' : 'Bank'}
+                              </button>
+                            );
+                          })()}
+                          <button
+                            type="button"
+                            onClick={() => toggleExcluded(t.id)}
+                            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold font-body"
+                            style={t.excludeFromTotals
+                              ? { background: COLORS.violetSoft, color: COLORS.violet }
+                              : { background: COLORS.bg, color: COLORS.inkSoft }}
+                            title="Mark as a transfer (e.g. paying your credit card bill) so it isn't double-counted as spending"
+                          >
+                            <Repeat size={11} /> {t.excludeFromTotals ? 'Transfer (excluded)' : 'Mark as transfer'}
+                          </button>
+                        </div>
+                        {t.savingsAllocations && t.savingsAllocations.length > 0 && (() => {
+                          const applied = isAllocationApplied(t);
+                          const dir = allocationDirection(t);
+                          const label = t.savingsAllocations.length === 1
+                            ? `${formatCurrency(t.savingsAllocations[0].amount)} ${dir === 'withdraw' ? '\u2190' : '\u2192'} ${bucketName(t.savingsAllocations[0].bucketId)}`
+                            : `${formatCurrency(t.savingsAllocations.reduce((s, a) => s + a.amount, 0))} ${dir === 'withdraw' ? '\u2190' : '\u2192'} ${t.savingsAllocations.length} buckets`;
+                          return (
+                            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                              <div
+                                className="flex items-center gap-1 font-body font-normal text-xs"
+                                style={{ color: applied ? (dir === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold }}
+                              >
+                                <PiggyBank size={11} />
+                                {applied ? label : `Pending \u2014 ${label}`}
+                              </div>
+                              <div
+                                onClick={() => toggleTransferConfirmed(t.id)}
+                                className="flex items-center gap-1 cursor-pointer select-none"
+                                title="Mark whether the transfer has actually happened"
+                              >
+                                <span
+                                  className="flex items-center justify-center flex-shrink-0"
+                                  style={{
+                                    width: 12, height: 12, borderRadius: 3,
+                                    border: `1.5px solid ${applied ? COLORS.teal : COLORS.border}`,
+                                    background: applied ? COLORS.teal : 'transparent',
+                                  }}
+                                >
+                                  {applied && <Check size={8} style={{ color: '#fff' }} strokeWidth={3} />}
+                                </span>
+                                <span className="font-body text-xs" style={{ color: applied ? COLORS.teal : COLORS.inkSoft }}>
+                                  Transferred
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {t.splits && t.splits.length ? (
+                          <button
+                            onClick={() => setExpandedSplits((p) => ({ ...p, [t.id]: !p[t.id] }))}
+                            className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold font-body"
+                            style={{ background: COLORS.violetSoft, color: COLORS.violet }}
+                          >
+                            {expandedSplits[t.id] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                            Split &middot; {t.splits.length}
+                          </button>
+                        ) : (
+                          <CategoryEditCell value={t.category} options={categoryOptionsFor(t.category)} bucketGroups={bucketGroups} onChange={(cat) => updateCategoryOrAllocate(t.id, cat)} />
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {t.splits && t.splits.length ? (
+                          <span className="font-semibold text-sm inline-flex items-center gap-0.5" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                            <button
+                              type="button"
+                              onClick={() => updateType(t.id)}
+                              className="font-semibold text-sm rounded px-0.5"
+                              title={t.type === 'income' ? 'Income — click to mark as expense' : 'Expense — click to mark as income'}
+                            >
+                              {t.type === 'income' ? '+' : '-'}
+                            </button>
+                            {formatCurrency(t.amount)}
+                          </span>
+                        ) : (
+                          <AmountEditCell value={t.amount} type={t.type} onCommit={(amt) => updateAmount(t.id, amt)} onToggleType={() => updateType(t.id)} />
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <div className="flex items-center justify-end gap-2.5">
+                          <button onClick={() => openAllocateModal(t)} style={{ color: t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : COLORS.inkSoft }} className="hover:text-teal-600" title="Choose bucket / allocate to savings">
+                            <PiggyBank size={15} />
+                          </button>
+                          <button onClick={() => openSplitModal(t)} style={{ color: COLORS.inkSoft }} className="hover:text-violet-600" title="Split transaction">
+                            <Scissors size={15} />
+                          </button>
+                          <button onClick={() => removeTransaction(t.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Delete">
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {t.splits && expandedSplits[t.id] && t.splits.map((s) => (
+                      <tr key={s.id} className="border-b last:border-0" style={{ borderColor: COLORS.border, background: COLORS.bg }}>
+                        <td className="px-4 py-2"></td>
+                        <td className="px-4 py-2"></td>
+                        <td className="px-4 py-2 pl-8 text-xs" style={{ color: COLORS.inkSoft }}>&#8618; portion</td>
+                        <td className="px-4 py-2">
+                          <CategoryEditCell value={s.category} options={categoryOptionsFor(s.category)} bucketGroups={bucketGroups} onChange={(cat) => updateSplitCategory(t.id, s.id, cat)} />
+                        </td>
+                        <td className="px-4 py-2 text-right font-semibold text-sm" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                          {t.type === 'income' ? '+' : '-'}{formatCurrency(s.amount)}
+                        </td>
+                        <td className="px-4 py-2"></td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {showImport && (
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+          <Card style={{ maxWidth: 520, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Import from CSV</h3>
+              <button onClick={() => { setShowImport(false); setPreview(null); }} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+            </div>
+            {!preview ? (
+              <>
+                <p className="font-body text-sm mb-3" style={{ color: COLORS.inkSoft }}>
+                  Upload a CSV with columns like date, description, amount, and optionally category or type. We'll auto-detect the columns.
+                </p>
+                <label className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed py-8 cursor-pointer" style={{ borderColor: COLORS.border }}>
+                  <Upload size={22} style={{ color: COLORS.violet }} />
+                  <span className="font-body text-sm font-semibold mt-2" style={{ color: COLORS.violet }}>Choose a CSV file</span>
+                  <input type="file" accept=".csv" onChange={handleFile} className="hidden" />
+                </label>
+              </>
+            ) : (
+              <>
+                <p className="font-body text-sm mb-2" style={{ color: COLORS.inkSoft }}>
+                  Found {preview.length} transaction(s). Review before importing:
+                  {preview.some((t) => t._memoryMatch) && (
+                    <span style={{ color: COLORS.violet }}> &middot; {preview.filter((t) => t._memoryMatch).length} auto-categorized from memory</span>
+                  )}
+                  {preview.some((t) => t._duplicate) && (
+                    <span style={{ color: COLORS.coral }}> &middot; {preview.filter((t) => t._duplicate).length} possible duplicate(s) unchecked below</span>
+                  )}
+                </p>
+                <div className="max-h-64 overflow-y-auto rounded-xl border mb-3" style={{ borderColor: COLORS.border }}>
+                  <table className="w-full text-xs font-body">
+                    <tbody>
+                      {preview.map((t) => (
+                        <tr
+                          key={t.id}
+                          className="border-b last:border-0"
+                          style={{ borderColor: COLORS.border, background: t._duplicate ? '#FFF3F3' : 'transparent', opacity: t._include ? 1 : 0.55 }}
+                        >
+                          <td className="pl-2 py-1.5" style={{ width: 26 }}>
+                            <div
+                              onClick={() => togglePreviewRow(t.id)}
+                              className="flex items-center justify-center cursor-pointer"
+                              style={{
+                                width: 14, height: 14, borderRadius: 4,
+                                border: `1.5px solid ${t._include ? COLORS.violet : COLORS.border}`,
+                                background: t._include ? COLORS.violet : 'transparent',
+                              }}
+                            >
+                              {t._include && <Check size={10} style={{ color: '#fff' }} strokeWidth={3} />}
+                            </div>
+                          </td>
+                          <td className="px-2 py-1.5">{t.date}</td>
+                          <td className="px-2 py-1.5">
+                            {t.description}
+                            {t._duplicate && (
+                              <div className="flex items-center gap-1 mt-0.5" style={{ color: COLORS.coral }}>
+                                <Flame size={10} />
+                                <span className="font-semibold" style={{ fontSize: 10 }}>Possible duplicate</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <div className="flex items-center gap-1">
+                              <CategoryBadge cat={t.category} />
+                              {t._memoryMatch && <Sparkles size={11} style={{ color: COLORS.violet }} title="Auto-categorized from memory" />}
+                            </div>
+                          </td>
+                          <td className="px-2 py-1.5 text-right" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                            {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <GhostButton onClick={() => setPreview(null)}>Back</GhostButton>
+                  <PrimaryButton onClick={confirmImport} disabled={preview.filter((t) => t._include).length === 0}>
+                    <Check size={15} /> Import {preview.filter((t) => t._include).length} entries
+                  </PrimaryButton>
+                </div>
+              </>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {splitTarget && (
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+          <Card style={{ maxWidth: 480, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Split transaction</h3>
+              <button onClick={() => setSplitTarget(null)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+            </div>
+
+            <div className="rounded-xl px-3 py-2 mb-4" style={{ background: COLORS.bg }}>
+              <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{splitTarget.description}</p>
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{splitTarget.date} &middot; Total {formatCurrency(splitTarget.amount)}</p>
+            </div>
+
+            {splitRows.length === 0 && (
+              <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+                Add a split for each category this transaction should be divided into. Whatever's left over automatically goes to the category below.
+              </p>
+            )}
+
+            <div className="space-y-2 mb-2">
+              {splitRows.map((row) => (
+                <div key={row.id} className="flex items-center gap-2">
+                  <Select value={row.category} onChange={(e) => updateSplitRow(row.id, 'category', e.target.value)} style={{ flex: 1 }}>
+                    <optgroup label="Categories">
+                      {categoryOptionsFor(row.category).map((c) => <option key={c} value={c}>{c}</option>)}
+                    </optgroup>
+                    {bucketCategoryNames.length > 0 && (
+                      <optgroup label="Savings buckets">
+                        {bucketCategoryNames.map((c) => <option key={c} value={c}>{`\uD83D\uDC37 ${c}`}</option>)}
+                      </optgroup>
+                    )}
+                  </Select>
+                  <TextInput
+                    type="number" min="0" step="0.01" placeholder="0.00"
+                    value={row.amount} onChange={(e) => updateSplitRow(row.id, 'amount', e.target.value)}
+                    style={{ width: 100 }}
+                  />
+                  <button onClick={() => removeSplitRow(row.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500">
+                    <X size={15} />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={addSplitRow} className="font-body text-xs font-semibold mb-4" style={{ color: COLORS.violet }}>
+              + Add another split
+            </button>
+
+            <div className="flex items-center gap-2 rounded-xl px-3 py-2 mb-1" style={{ background: remaining < 0 ? '#FFE9E9' : COLORS.violetSoft }}>
+              <Select value={remainderCategory} onChange={(e) => setRemainderCategory(e.target.value)} style={{ flex: 1 }}>
+                <optgroup label="Categories">
+                  {categoryOptionsFor(remainderCategory).map((c) => <option key={c} value={c}>{c}</option>)}
+                </optgroup>
+                {bucketCategoryNames.length > 0 && (
+                  <optgroup label="Savings buckets">
+                    {bucketCategoryNames.map((c) => <option key={c} value={c}>{`\uD83D\uDC37 ${c}`}</option>)}
+                  </optgroup>
+                )}
+              </Select>
+              <span
+                className="font-display font-semibold text-sm"
+                style={{ color: remaining < 0 ? COLORS.coral : COLORS.violet, minWidth: 90, textAlign: 'right' }}
+              >
+                {formatCurrency(Math.max(remaining, 0))}
+              </span>
+            </div>
+            <p className="font-body text-xs mb-4" style={{ color: remaining < 0 ? COLORS.coral : COLORS.inkSoft }}>
+              {remaining < 0
+                ? `You've allocated ${formatCurrency(-remaining)} more than the total.`
+                : 'Remaining amount, auto-calculated from the total above.'}
+            </p>
+
+            <div className="flex justify-between items-center">
+              {splitTarget.splits ? (
+                <GhostButton onClick={() => { removeSplit(splitTarget.id); setSplitTarget(null); }}>Remove split</GhostButton>
+              ) : <span />}
+              <PrimaryButton onClick={confirmSplit} disabled={splitRows.length === 0 || remaining < 0}>
+                <Check size={15} /> Save split
+              </PrimaryButton>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {allocateTarget && (
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+          <Card style={{ maxWidth: 460, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Choose bucket</h3>
+              <button onClick={() => setAllocateTarget(null)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+            </div>
+
+            <div className="rounded-xl px-3 py-2 mb-4" style={{ background: COLORS.bg }}>
+              <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{allocateTarget.description}</p>
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{allocateTarget.date} &middot; Total {formatCurrency(allocateTarget.amount)}</p>
+            </div>
+
+            <label className="font-body text-xs font-semibold mb-1.5 block" style={{ color: COLORS.inkSoft }}>Direction</label>
+            <div className="flex items-center gap-2 mb-1.5">
+              <button
+                onClick={() => setAllocateDirection('deposit')}
+                className="flex-1 flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold font-body transition-colors"
+                style={allocateDirection === 'deposit'
+                  ? { background: COLORS.violet, color: '#fff' }
+                  : { background: COLORS.violetSoft, color: COLORS.violet }}
+              >
+                <TrendingUp size={14} /> Deposit
+              </button>
+              <button
+                onClick={() => setAllocateDirection('withdraw')}
+                className="flex-1 flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold font-body transition-colors"
+                style={allocateDirection === 'withdraw'
+                  ? { background: COLORS.coral, color: '#fff' }
+                  : { background: '#FFE9E9', color: COLORS.coral }}
+              >
+                <TrendingDown size={14} /> Withdraw
+              </button>
+            </div>
+            <p className="font-body text-xs mb-4" style={{ color: COLORS.inkSoft }}>
+              {allocateDirection === 'withdraw'
+                ? 'Amounts below will be subtracted from the buckets (money coming out of savings).'
+                : 'Amounts below will be added to the buckets (money going into savings).'}
+            </p>
+
+            {goals.length === 0 && allocateRows.length === 0 ? (
+              <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+                You don't have any savings buckets yet. Create one below to get started.
+              </p>
+            ) : (
+              <div className="space-y-2 mb-2">
+                {allocateRows.map((row) => (
+                  <div key={row.id} className="flex items-center gap-2">
+                    <Select value={row.bucketId} onChange={(e) => updateAllocateRow(row.id, 'bucketId', e.target.value)} style={{ flex: 1 }}>
+                      {savingsAccountsList.map((a) => {
+                        const acctGoals = goals.filter((g) => g.accountId === a.id);
+                        if (!acctGoals.length) return null;
+                        return (
+                          <optgroup key={a.id} label={`${a.name}${a.mask ? ` ••${a.mask}` : ''}`}>
+                            {acctGoals.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                          </optgroup>
+                        );
+                      })}
+                      {(() => {
+                        const linkedIds = new Set(savingsAccountsList.map((a) => a.id));
+                        const unlinked = goals.filter((g) => !g.accountId || !linkedIds.has(g.accountId));
+                        if (!unlinked.length) return null;
+                        return (
+                          <optgroup label="Not linked to an account">
+                            {unlinked.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                          </optgroup>
+                        );
+                      })()}
+                    </Select>
+                    <TextInput
+                      type="number" min="0" step="0.01" placeholder="0.00"
+                      value={row.amount} onChange={(e) => updateAllocateRow(row.id, 'amount', e.target.value)}
+                      style={{ width: 100 }}
+                    />
+                    <button onClick={() => removeAllocateRow(row.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500">
+                      <X size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {goals.length > 0 && (
+              <button onClick={addAllocateRow} className="font-body text-xs font-semibold mb-4" style={{ color: COLORS.violet }}>
+                + Add another bucket
+              </button>
+            )}
+
+            <div className="flex items-center gap-2 mb-1">
+              <TextInput
+                placeholder="New bucket name"
+                value={newBucketName}
+                onChange={(e) => setNewBucketName(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <GhostButton onClick={createBucketInline}><Plus size={14} /> Create</GhostButton>
+            </div>
+
+            <p className="font-body text-xs mt-3 mb-4" style={{ color: allocateOverBudget ? COLORS.coral : COLORS.inkSoft }}>
+              {allocateOverBudget
+                ? `You've allocated ${formatCurrency(allocatedSum)}, more than the ${formatCurrency(allocateTarget.amount)} transaction.`
+                : `Allocated ${formatCurrency(allocatedSum)} of ${formatCurrency(allocateTarget.amount)}. Doesn't need to add up to the full amount.`}
+            </p>
+
+            <div className="flex justify-between items-center">
+              {allocateTarget.savingsAllocations ? (
+                <GhostButton onClick={removeAllocation}>Remove allocation</GhostButton>
+              ) : <span />}
+              <PrimaryButton onClick={confirmAllocate} disabled={allocateOverBudget}>
+                <Check size={15} /> Save allocation
+              </PrimaryButton>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {showOrphanReview && (
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+          <Card style={{ maxWidth: 560, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Review leftover transactions</h3>
+              <button onClick={() => setShowOrphanReview(false)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+            </div>
+            <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+              These are tied to a bank account that's no longer connected. That's expected for an old sandbox test bank &mdash; but if you disconnected and reconnected a <em>real</em> bank, these could be genuine history (paychecks, mortgage payments, etc.) that Plaid's new connection hasn't re-supplied yet. Nothing is deleted until you select transactions below and confirm.
+            </p>
+            <div className="rounded-xl border mb-3" style={{ borderColor: COLORS.border, maxHeight: 320, overflowY: 'auto' }}>
+              <table className="w-full text-xs font-body">
+                <thead>
+                  <tr className="text-left border-b" style={{ borderColor: COLORS.border, color: COLORS.inkSoft }}>
+                    <th className="pl-3 pr-1 py-2" style={{ width: 24 }}>
+                      <div
+                        onClick={() => {
+                          const allIds = orphanedTransactions.map((t) => t.id);
+                          const allSelected = allIds.every((id) => orphanSelected.has(id));
+                          setOrphanSelected(allSelected ? new Set() : new Set(allIds));
+                        }}
+                        className="flex items-center justify-center cursor-pointer"
+                        style={{
+                          width: 13, height: 13, borderRadius: 3,
+                          border: `1.5px solid ${orphanedTransactions.length > 0 && orphanedTransactions.every((t) => orphanSelected.has(t.id)) ? COLORS.violet : COLORS.border}`,
+                          background: orphanedTransactions.length > 0 && orphanedTransactions.every((t) => orphanSelected.has(t.id)) ? COLORS.violet : 'transparent',
+                        }}
+                      >
+                        {orphanedTransactions.length > 0 && orphanedTransactions.every((t) => orphanSelected.has(t.id)) && <Check size={9} style={{ color: '#fff' }} strokeWidth={3} />}
+                      </div>
+                    </th>
+                    <th className="px-2 py-2">Date</th>
+                    <th className="px-2 py-2">Description</th>
+                    <th className="px-2 py-2 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orphanedTransactions.map((t) => (
+                    <tr key={t.id} className="border-b last:border-0" style={{ borderColor: COLORS.border }}>
+                      <td className="pl-3 pr-1 py-1.5">
+                        <div
+                          onClick={() => toggleOrphanSelected(t.id)}
+                          className="flex items-center justify-center cursor-pointer"
+                          style={{
+                            width: 13, height: 13, borderRadius: 3,
+                            border: `1.5px solid ${orphanSelected.has(t.id) ? COLORS.violet : COLORS.border}`,
+                            background: orphanSelected.has(t.id) ? COLORS.violet : 'transparent',
+                          }}
+                        >
+                          {orphanSelected.has(t.id) && <Check size={9} style={{ color: '#fff' }} strokeWidth={3} />}
+                        </div>
+                      </td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{t.date}</td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{t.description}</td>
+                      <td className="px-2 py-1.5 text-right" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                        {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{orphanSelected.size} selected</span>
+              <div className="flex gap-2">
+                <GhostButton onClick={() => setShowOrphanReview(false)}>Close</GhostButton>
+                <button
+                  onClick={deleteSelectedOrphans}
+                  disabled={orphanSelected.size === 0}
+                  className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold font-body text-white disabled:opacity-50"
+                  style={{ background: COLORS.coral }}
+                >
+                  <Trash2 size={15} /> Delete selected
+                </button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {showCategoryManager && (
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+          <Card style={{ maxWidth: 420, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Manage categories</h3>
+              <button onClick={() => setShowCategoryManager(false)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+            </div>
+            <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+              Hide categories you don't use to declutter the dropdowns. Nothing is deleted — existing transactions keep their category, and you can bring one back anytime.
+            </p>
+
+            <CategoryManager
+              budgets={budgets}
+              transactions={transactions}
+              goals={goals}
+              hiddenCategories={hiddenCategories}
+              updateHiddenCategories={updateHiddenCategories}
+              renameCategory={renameCategory}
+              categoryColors={categoryColors}
+              updateCategoryColors={updateCategoryColors}
+            />
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------- Budgets ---------------------------------- */
+
+function BudgetsView({ budgets, updateBudgets, transactions, month, setMonth, categoryColors, updateCategoryColors, goals }) {
+  const [newCat, setNewCat] = useState('');
+  const [newLimit, setNewLimit] = useState('');
+  const [colorPickerOpen, setColorPickerOpen] = useState({});
+
+  const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
+
+  const spentByCategory = useMemo(() => {
+    const map = {};
+    transactions.filter((t) => t.type === 'expense' && !t.excludeFromTotals && t.date.startsWith(month)).forEach((t) => {
+      if (t.splits && t.splits.length) {
+        t.splits.forEach((s) => {
+          if (bucketNameSet.has(s.category)) return;
+          map[s.category] = (map[s.category] || 0) + s.amount;
+        });
+      } else if (!bucketNameSet.has(t.category)) {
+        map[t.category] = (map[t.category] || 0) + t.amount;
+      }
+    });
+    return map;
+  }, [transactions, month, bucketNameSet]);
+
+  function addCategory() {
+    if (!newCat.trim() || !newLimit) return;
+    updateBudgets({ ...budgets, [newCat.trim()]: parseFloat(newLimit) || 0 });
+    setNewCat(''); setNewLimit('');
+  }
+
+  function updateLimit(cat, val) {
+    updateBudgets({ ...budgets, [cat]: parseFloat(val) || 0 });
+  }
+
+  function removeCategory(cat) {
+    const next = { ...budgets };
+    delete next[cat];
+    updateBudgets(next);
+  }
+
+  function setCategoryColor(cat, color) {
+    updateCategoryColors({ ...categoryColors, [cat]: color });
+  }
+
+  function toggleColorPicker(cat) {
+    setColorPickerOpen((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  }
+
+  const entries = Object.entries(budgets);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Budgets</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Set a monthly limit per category and watch the jars fill.</p>
+        </div>
+        <MonthNav month={month} setMonth={setMonth} />
+      </div>
+
+      <Card>
+        <div className="flex flex-wrap gap-2 items-end">
+          <div className="flex-1 min-w-[160px]">
+            <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Category name</label>
+            <TextInput list="cat-suggestions" placeholder="e.g. Groceries" value={newCat} onChange={(e) => setNewCat(e.target.value)} />
+            <datalist id="cat-suggestions">
+              {DEFAULT_EXPENSE_CATEGORIES.map((c) => <option key={c} value={c} />)}
+            </datalist>
+          </div>
+          <div>
+            <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Monthly limit</label>
+            <TextInput type="number" min="0" step="1" placeholder="0" value={newLimit} onChange={(e) => setNewLimit(e.target.value)} style={{ width: 130 }} />
+          </div>
+          <PrimaryButton onClick={addCategory}><Plus size={15} /> Add</PrimaryButton>
+        </div>
+      </Card>
+
+      {entries.length === 0 ? (
+        <Card><EmptyState icon={PiggyBank} title="No budgets yet" subtitle="Add your first category above to start tracking limits." /></Card>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-4">
+          {entries.map(([cat, limit]) => {
+            const spent = spentByCategory[cat] || 0;
+            const pct = limit ? (spent / limit) * 100 : 0;
+            return (
+              <Card key={cat}>
+                <div className="flex items-center justify-between mb-2">
+                  <CategoryBadge cat={cat} />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => toggleColorPicker(cat)}
+                      style={{ color: colorPickerOpen[cat] ? COLORS.violet : COLORS.inkSoft }}
+                      className="hover:text-violet-600"
+                      title="Change color"
+                    >
+                      <Palette size={14} />
+                    </button>
+                    <button onClick={() => removeCategory(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500"><Trash2 size={14} /></button>
+                  </div>
+                </div>
+                {colorPickerOpen[cat] && (
+                  <div className="mb-3">
+                    <CategoryColorPicker current={categoryColor(cat, categoryColors)} onChange={(c) => setCategoryColor(cat, c)} />
+                  </div>
+                )}
+                <JarBar pct={pct} height={16} />
+                <div className="flex items-center justify-between mt-2 font-body text-sm">
+                  <span style={{ color: COLORS.inkSoft }}>{formatCurrency(spent)} spent</span>
+                  <div className="flex items-center gap-1">
+                    <span style={{ color: COLORS.inkSoft }}>limit</span>
+                    <input
+                      type="number" min="0" value={limit}
+                      onChange={(e) => updateLimit(cat, e.target.value)}
+                      className="w-20 rounded-lg px-2 py-1 text-right font-semibold text-sm outline-none"
+                      style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink }}
+                    />
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------- Goals ---------------------------------- */
+
+function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateTargetDate, updateSavedAmount, updateBucketName, removeBucket, onViewTransfers }) {
+  const hasTarget = g.target != null && g.target > 0;
+  const pct = hasTarget ? (g.saved / g.target) * 100 : 0;
+  const done = hasTarget && pct >= 100;
+  const monthlyNeeded = monthlySavingsNeeded(g);
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="rounded-full p-1.5 flex-shrink-0" style={{ background: COLORS.violetSoft }}>
+            {done ? <Sparkles size={15} style={{ color: COLORS.violet }} /> : <PiggyBank size={15} style={{ color: COLORS.violet }} />}
+          </div>
+          <input
+            key={`name-${g.id}`}
+            defaultValue={g.name}
+            onBlur={(e) => {
+              e.target.style.borderColor = 'transparent';
+              e.target.style.background = 'transparent';
+              updateBucketName(g.id, e.target.value);
+            }}
+            onFocus={(e) => { e.target.style.borderColor = COLORS.violet; e.target.style.background = '#fff'; }}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+            className="font-display font-semibold rounded-lg px-1.5 py-0.5 outline-none min-w-0 flex-1"
+            style={{ color: COLORS.ink, border: `1.5px solid transparent`, background: 'transparent' }}
+          />
+        </div>
+        <button onClick={() => removeBucket(g.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500 flex-shrink-0"><Trash2 size={14} /></button>
+      </div>
+
+      {savingsAccounts.length > 0 && (
+        <div className="mb-3 flex items-center gap-1.5">
+          <select
+            value={g.accountId || ''}
+            onChange={(e) => updateGoalAccount(g.id, e.target.value)}
+            className="rounded-full pl-2.5 pr-6 py-0.5 text-xs font-semibold font-body outline-none cursor-pointer appearance-none"
+            style={g.accountId
+              ? { background: `${COLORS.teal}22`, color: COLORS.teal, border: 'none' }
+              : { background: COLORS.bg, color: COLORS.inkSoft, border: `1px solid ${COLORS.border}` }}
+          >
+            <option value="">Not linked to an account</option>
+            {savingsAccounts.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ••${a.mask}` : ''}</option>
+            ))}
+          </select>
+          {g.accountId && (() => {
+            const match = perAccountReconcile.find((r) => r.account.id === g.accountId);
+            if (!match) return null;
+            const inSync = match.diff === 0;
+            return (
+              <span title={inSync ? `${match.account.name} matches its linked buckets` : `${match.account.name} is ${formatCurrency(Math.abs(match.diff))} ${match.diff > 0 ? 'unassigned' : 'over-allocated'}`}>
+                {inSync
+                  ? <Check size={13} style={{ color: COLORS.teal }} />
+                  : <Flame size={13} style={{ color: COLORS.gold }} />}
+              </span>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Total: the headline number for this bucket. */}
+      <div className="flex items-center gap-1">
+        <span className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>$</span>
+        <input
+          key={`saved-${g.id}`}
+          type="number" min="0" step="0.01"
+          defaultValue={g.saved}
+          onBlur={(e) => {
+            e.target.style.borderColor = 'transparent';
+            e.target.style.background = 'transparent';
+            updateSavedAmount(g.id, e.target.value);
+          }}
+          onFocus={(e) => { e.target.style.borderColor = COLORS.violet; e.target.style.background = '#fff'; }}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+          className="font-display font-bold text-2xl rounded-lg px-1.5 py-0.5 outline-none"
+          style={{ color: COLORS.ink, border: `1.5px solid transparent`, background: 'transparent', width: 140 }}
+        />
+      </div>
+
+      {/* Target: secondary context, sits below the total. */}
+      {hasTarget ? (
+        <div className="mt-1">
+          <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+            of {formatCurrency(g.target)} target &middot; <span className="font-semibold" style={{ color: done ? COLORS.teal : COLORS.violet }}>{Math.min(pct, 100).toFixed(0)}%</span>
+          </p>
+          <div className="mt-1.5">
+            <JarBar pct={pct} height={10} />
+          </div>
+          {!done && (
+            <div className="flex items-center gap-2 mt-2">
+              <TextInput
+                type="date"
+                value={g.targetDate || ''}
+                onChange={(e) => updateTargetDate(g.id, e.target.value)}
+                style={{ fontSize: 11, padding: '4px 8px', flex: 1 }}
+              />
+              {g.targetDate && (
+                <span
+                  className="font-body text-xs font-semibold whitespace-nowrap"
+                  style={{ color: monthlyNeeded > 0 ? COLORS.violet : COLORS.teal }}
+                >
+                  {formatCurrency(monthlyNeeded)}/mo
+                </span>
+              )}
+            </div>
+          )}
+          {!g.targetDate && !done && (
+            <p className="font-body text-xs mt-1" style={{ color: COLORS.inkSoft }}>Set a target date to see how much to save monthly.</p>
+          )}
+        </div>
+      ) : (
+        <p className="font-body text-xs mt-1" style={{ color: COLORS.inkSoft }}>No target set</p>
+      )}
+
+      <div className="flex gap-2 mt-3">
+        <TextInput
+          type="number" min="0" placeholder="Add funds"
+          value={deposit || ''}
+          onChange={(e) => onDepositChange(e.target.value)}
+        />
+        <GhostButton onClick={onAddFunds}><Plus size={14} /> Add</GhostButton>
+      </div>
+      <div className="mt-2">
+        <TextInput
+          type="number" min="0" placeholder="Set a target (optional)"
+          defaultValue={g.target || ''}
+          onBlur={(e) => updateTarget(g.id, e.target.value)}
+          style={{ fontSize: 12 }}
+        />
+      </div>
+      {onViewTransfers && (
+        <button
+          onClick={onViewTransfers}
+          className="w-full font-body text-xs font-semibold mt-3 text-center"
+          style={{ color: COLORS.violet }}
+        >
+          View transfers &rarr;
+        </button>
+      )}
+    </Card>
+  );
+}
+
+// Shared bucket CRUD + "add funds" form state used by both the Savings tab
+// (many linked accounts) and the Annual tab (one account, buckets default to it).
+function useBucketActions(goals, updateGoals, { defaultAccountId } = {}) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [name, setName] = useState('');
+  const [target, setTarget] = useState('');
+  const [deposits, setDeposits] = useState({});
+
+  function setDeposit(id, val) {
+    setDeposits((d) => ({ ...d, [id]: val }));
+  }
+
+  function addBucket() {
+    if (!name.trim()) return;
+    const t = parseFloat(target);
+    updateGoals([...goals, {
+      id: uid(), name: name.trim(), target: t > 0 ? t : null, saved: 0,
+      ...(defaultAccountId ? { accountId: defaultAccountId } : {}),
+    }]);
+    setName(''); setTarget(''); setShowAdd(false);
+  }
+
+  function addFunds(id) {
+    const amt = parseFloat(deposits[id]);
+    if (!amt) return;
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, saved: g.saved + amt } : g)));
+    setDeposit(id, '');
+  }
+
+  function updateTarget(id, val) {
+    const t = parseFloat(val);
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, target: t > 0 ? t : null } : g)));
+  }
+
+  function updateTargetDate(id, val) {
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, targetDate: val || undefined } : g)));
+  }
+
+  function updateSavedAmount(id, val) {
+    const v = Math.max(0, parseFloat(val) || 0);
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, saved: v } : g)));
+  }
+
+  function updateBucketName(id, val) {
+    const v = val.trim();
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, name: v || g.name } : g)));
+  }
+
+  function removeBucket(id) {
+    updateGoals(goals.filter((g) => g.id !== id));
+  }
+
+  function updateGoalAccount(id, accountId) {
+    updateGoals(goals.map((g) => (g.id === id ? { ...g, accountId: accountId || undefined } : g)));
+  }
+
+  return {
+    showAdd, setShowAdd, name, setName, target, setTarget,
+    deposits, setDeposit,
+    addBucket, addFunds, updateTarget, updateTargetDate, updateSavedAmount,
+    updateBucketName, removeBucket, updateGoalAccount,
+  };
+}
+
+function SavingsView({ goals, updateGoals, transactions, accounts, annualAccountId, goToLedgerBucket }) {
+  const [collapsedAccounts, setCollapsedAccounts] = useState(() => new Set());
+  const {
+    showAdd, setShowAdd, name, setName, target, setTarget,
+    deposits, setDeposit,
+    addBucket, addFunds, updateTarget, updateTargetDate, updateSavedAmount,
+    updateBucketName, removeBucket, updateGoalAccount,
+  } = useBucketActions(goals, updateGoals);
+
+  function toggleAccountCollapsed(accountId) {
+    setCollapsedAccounts((prev) => {
+      const next = new Set(prev);
+      if (next.has(accountId)) next.delete(accountId); else next.add(accountId);
+      return next;
+    });
+  }
+
+  const savingsAccounts = useMemo(
+    () => (accounts || []).filter((a) => isSavingsAccount(a) && a.id !== annualAccountId),
+    [accounts, annualAccountId]
+  );
+  const savingsAccountIds = useMemo(() => new Set(savingsAccounts.map((a) => a.id)), [savingsAccounts]);
+  // Buckets linked to the Annual account live entirely in the Annual tab instead.
+  const visibleGoals = useMemo(
+    () => goals.filter((g) => !annualAccountId || g.accountId !== annualAccountId),
+    [goals, annualAccountId]
+  );
+
+  const perAccountReconcile = useMemo(() => savingsAccounts.map((a) => {
+    const linkedGoals = visibleGoals.filter((g) => g.accountId === a.id);
+    const allocated = linkedGoals.reduce((s, g) => s + (g.saved || 0), 0);
+    const diff = Math.round(((Number(a.balance) || 0) - allocated) * 100) / 100;
+    const monthlyNeeded = linkedGoals.reduce((s, g) => s + monthlySavingsNeeded(g), 0);
+    return { account: a, allocated, diff, linkedGoals, monthlyNeeded };
+  }), [savingsAccounts, visibleGoals]);
+
+  const unlinkedGoals = useMemo(
+    () => visibleGoals.filter((g) => !g.accountId || !savingsAccountIds.has(g.accountId)),
+    [visibleGoals, savingsAccountIds]
+  );
+  const unlinkedTotal = unlinkedGoals.reduce((s, g) => s + (g.saved || 0), 0);
+
+  const pendingByBucket = useMemo(() => {
+    const map = {};
+    transactions.forEach((t) => {
+      if (!t.savingsAllocations || !t.savingsAllocations.length || t.savingsTransferConfirmed !== false) return;
+      const dir = t.savingsDirection || (t.type === 'income' ? 'withdraw' : 'deposit');
+      const sign = dir === 'withdraw' ? -1 : 1;
+      t.savingsAllocations.forEach((a) => {
+        map[a.bucketId] = (map[a.bucketId] || 0) + sign * a.amount;
+      });
+    });
+    return map;
+  }, [transactions]);
+
+  const hasPending = visibleGoals.some((g) => pendingByBucket[g.id]);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Savings</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Name your buckets, then allocate money into them &mdash; from here or right from the ledger.</p>
+        </div>
+        <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New bucket</PrimaryButton>
+      </div>
+
+      {hasPending && (
+        <Card style={{ borderColor: COLORS.gold, background: '#FFFBF0' }}>
+          <div className="flex items-center gap-2 mb-2">
+            <Flame size={15} style={{ color: COLORS.gold }} />
+            <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Pending transfers</h3>
+          </div>
+          <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+            Tagged in the ledger but not yet confirmed with the "Transferred" checkbox.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-2">
+            {visibleGoals.filter((g) => pendingByBucket[g.id]).map((g) => {
+              const amt = pendingByBucket[g.id];
+              return (
+                <div key={g.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: '#fff' }}>
+                  <span className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{g.name}</span>
+                  <span className="font-display font-semibold text-sm" style={{ color: amt >= 0 ? COLORS.gold : COLORS.coral }}>
+                    {amt >= 0 ? '+' : '-'}{formatCurrency(Math.abs(amt))}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {showAdd && (
+        <Card>
+          <div className="flex flex-wrap gap-2 items-end">
+            <div className="flex-1 min-w-[160px]">
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Bucket name</label>
+              <TextInput placeholder="e.g. Emergency Fund" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Target (optional)</label>
+              <TextInput type="number" min="0" placeholder="No target" value={target} onChange={(e) => setTarget(e.target.value)} style={{ width: 140 }} />
+            </div>
+            <PrimaryButton onClick={addBucket}><Check size={15} /> Create</PrimaryButton>
+          </div>
+        </Card>
+      )}
+
+      {visibleGoals.length === 0 ? (
+        <Card><EmptyState icon={Target} title="No savings buckets yet" subtitle="Create one for anything you're setting money aside for &mdash; an emergency fund, a trip, a house." /></Card>
+      ) : (
+        <div className="space-y-5">
+          {perAccountReconcile.map(({ account, allocated, diff, linkedGoals, monthlyNeeded }) => {
+            const expanded = !collapsedAccounts.has(account.id);
+            return (
+              <div key={account.id}>
+                <button
+                  type="button"
+                  onClick={() => toggleAccountCollapsed(account.id)}
+                  className="w-full flex items-center justify-between px-5 py-4"
+                  style={{
+                    background: COLORS.surface, border: `1px solid ${COLORS.border}`,
+                    borderRadius: expanded ? '16px 16px 0 0' : 16,
+                  }}
+                >
+                  <div className="text-left">
+                    <p className="font-display font-semibold" style={{ color: COLORS.ink }}>
+                      {account.name}{account.mask ? ` ••${account.mask}` : ''}
+                    </p>
+                    <p className="font-body text-xs mt-0.5" style={{ color: COLORS.inkSoft }}>
+                      Real balance {formatCurrency(account.balance)} &middot; linked {formatCurrency(allocated)}
+                      {monthlyNeeded > 0 && <> &middot; <span style={{ color: COLORS.violet, fontWeight: 600 }}>{formatCurrency(monthlyNeeded)}/mo to hit targets</span></>}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {diff === 0 ? (
+                      <span className="inline-flex items-center gap-1 font-body text-xs font-semibold rounded-full px-2.5 py-1" style={{ background: `${COLORS.teal}22`, color: COLORS.teal }}>
+                        <Check size={11} /> Matches
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 font-body text-xs font-semibold rounded-full px-2.5 py-1" style={{ background: '#FFFBF0', color: COLORS.gold }}>
+                        <Flame size={11} /> {formatCurrency(Math.abs(diff))} {diff > 0 ? 'unassigned' : 'over-allocated'}
+                      </span>
+                    )}
+                    {expanded ? <ChevronDown size={16} style={{ color: COLORS.inkSoft }} /> : <ChevronRight size={16} style={{ color: COLORS.inkSoft }} />}
+                  </div>
+                </button>
+                {expanded && (
+                  <div
+                    className="p-4"
+                    style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, borderTop: 'none', borderRadius: '0 0 16px 16px' }}
+                  >
+                    {linkedGoals.length === 0 ? (
+                      <p className="font-body text-xs px-1" style={{ color: COLORS.inkSoft }}>No buckets linked to this account yet.</p>
+                    ) : (
+                      <div className="grid sm:grid-cols-2 gap-4">
+                        {linkedGoals.map((g) => (
+                          <BucketCard
+                            key={g.id}
+                            g={g}
+                            savingsAccounts={savingsAccounts}
+                            perAccountReconcile={perAccountReconcile}
+                            deposit={deposits[g.id]}
+                            onDepositChange={(v) => setDeposit(g.id, v)}
+                            onAddFunds={() => addFunds(g.id)}
+                            updateGoalAccount={updateGoalAccount}
+                            updateTarget={updateTarget}
+                            updateTargetDate={updateTargetDate}
+                            updateSavedAmount={updateSavedAmount}
+                            updateBucketName={updateBucketName}
+                            removeBucket={removeBucket}
+                            onViewTransfers={() => goToLedgerBucket(g.id)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {unlinkedGoals.length > 0 && (
+            <div>
+              <p className="font-body text-xs font-semibold mb-2 px-1" style={{ color: COLORS.inkSoft }}>Not linked to an account</p>
+              <div className="grid sm:grid-cols-2 gap-4">
+                {unlinkedGoals.map((g) => (
+                  <BucketCard
+                    key={g.id}
+                    g={g}
+                    savingsAccounts={savingsAccounts}
+                    perAccountReconcile={perAccountReconcile}
+                    deposit={deposits[g.id]}
+                    onDepositChange={(v) => setDeposit(g.id, v)}
+                    onAddFunds={() => addFunds(g.id)}
+                    updateGoalAccount={updateGoalAccount}
+                    updateTarget={updateTarget}
+                            updateTargetDate={updateTargetDate}
+                    updateSavedAmount={updateSavedAmount}
+                    updateBucketName={updateBucketName}
+                    removeBucket={removeBucket}
+                    onViewTransfers={() => goToLedgerBucket(g.id)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------- Annual ---------------------------------- */
+
+function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBucket, annualAccountId }) {
+  const {
+    showAdd, setShowAdd, name, setName, target, setTarget,
+    deposits, setDeposit,
+    addBucket, addFunds, updateTarget, updateTargetDate, updateSavedAmount,
+    updateBucketName, removeBucket, updateGoalAccount,
+  } = useBucketActions(goals, updateGoals, { defaultAccountId: annualAccountId });
+
+  const account = (accounts || []).find((a) => a.id === annualAccountId);
+  const bucketGoals = useMemo(() => goals.filter((g) => g.accountId === annualAccountId), [goals, annualAccountId]);
+  const allocated = bucketGoals.reduce((s, g) => s + (g.saved || 0), 0);
+  const diff = account ? Math.round(((Number(account.balance) || 0) - allocated) * 100) / 100 : 0;
+  const monthlyNeededTotal = bucketGoals.reduce((s, g) => s + monthlySavingsNeeded(g), 0);
+  const perAccountReconcile = account ? [{ account, allocated, diff, linkedGoals: bucketGoals }] : [];
+  const savingsAccountsList = account ? [account] : [];
+
+  if (!annualAccountId) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Annual</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Track an account where money actively flows in and out, separate from long-term savings.</p>
+        </div>
+        <Card>
+          <EmptyState
+            icon={CalendarClock}
+            title="No account chosen yet"
+            subtitle="Head to Settings and pick which connected account this should track."
+          />
+          <div className="flex justify-center mt-2">
+            <GhostButton onClick={() => setTab('settings')}>Go to Settings</GhostButton>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!account) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Annual</h2>
+        </div>
+        <Card>
+          <EmptyState
+            icon={CalendarClock}
+            title="Account not found"
+            subtitle="The account chosen in Settings isn't connected anymore &mdash; pick a different one."
+          />
+          <div className="flex justify-center mt-2">
+            <GhostButton onClick={() => setTab('settings')}>Go to Settings</GhostButton>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Annual</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>
+            {account.name}{account.mask ? ` ••${account.mask}` : ''} &mdash; money flows in and out here, tracked separately from long-term savings.
+          </p>
+        </div>
+        <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New bucket</PrimaryButton>
+      </div>
+
+      {/* Level 1: account + a lighter-weight reality check than the full Savings tab version. */}
+      <div className="flex items-center justify-between rounded-2xl px-5 py-3" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+        <div className="flex items-center gap-4">
+          <div>
+            <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Real balance</p>
+            <p className="font-display font-semibold" style={{ color: COLORS.ink }}>{formatCurrency(account.balance)}</p>
+          </div>
+          <div>
+            <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Allocated to buckets</p>
+            <p className="font-display font-semibold" style={{ color: COLORS.ink }}>{formatCurrency(allocated)}</p>
+          </div>
+          {monthlyNeededTotal > 0 && (
+            <div>
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>To hit targets</p>
+              <p className="font-display font-semibold" style={{ color: COLORS.violet }}>{formatCurrency(monthlyNeededTotal)}/mo</p>
+            </div>
+          )}
+        </div>
+        {diff === 0 ? (
+          <span className="inline-flex items-center gap-1 font-body text-xs font-semibold rounded-full px-2.5 py-1" style={{ background: `${COLORS.teal}22`, color: COLORS.teal }}>
+            <Check size={11} /> Matches
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 font-body text-xs font-semibold rounded-full px-2.5 py-1" style={{ background: '#FFFBF0', color: COLORS.gold }}>
+            <Flame size={11} /> {formatCurrency(Math.abs(diff))} {diff > 0 ? 'unassigned' : 'over-allocated'}
+          </span>
+        )}
+      </div>
+
+      {showAdd && (
+        <Card>
+          <div className="flex flex-wrap gap-2 items-end">
+            <div className="flex-1 min-w-[160px]">
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Bucket name</label>
+              <TextInput placeholder="e.g. Amazon" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Target (optional)</label>
+              <TextInput type="number" min="0" placeholder="No target" value={target} onChange={(e) => setTarget(e.target.value)} style={{ width: 140 }} />
+            </div>
+            <PrimaryButton onClick={addBucket}><Check size={15} /> Create</PrimaryButton>
+          </div>
+        </Card>
+      )}
+
+      {/* Level 2: buckets for this account. */}
+      {bucketGoals.length === 0 ? (
+        <Card><EmptyState icon={Target} title="No buckets yet" subtitle="Create one above for each thing this account covers &mdash; Amazon, insurance, Costco, whatever you're tracking." /></Card>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-4">
+          {bucketGoals.map((g) => (
+            <BucketCard
+              key={g.id}
+              g={g}
+              savingsAccounts={savingsAccountsList}
+              perAccountReconcile={perAccountReconcile}
+              deposit={deposits[g.id]}
+              onDepositChange={(v) => setDeposit(g.id, v)}
+              onAddFunds={() => addFunds(g.id)}
+              updateGoalAccount={updateGoalAccount}
+              updateTarget={updateTarget}
+                            updateTargetDate={updateTargetDate}
+              updateSavedAmount={updateSavedAmount}
+              updateBucketName={updateBucketName}
+              removeBucket={removeBucket}
+              onViewTransfers={() => goToLedgerBucket(g.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ---------------------------------- Bills ---------------------------------- */
+
+function BillsView({ bills, updateBills, month, budgets, hiddenCategories }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState({ name: '', amount: '', dueDay: '1', category: 'Utilities' });
+
+  const allCategories = useMemo(() => {
+    const set = new Set([...DEFAULT_EXPENSE_CATEGORIES, ...Object.keys(budgets)]);
+    bills.forEach((b) => set.add(b.category));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [budgets, bills]);
+
+  const visibleCategories = useMemo(
+    () => allCategories.filter((c) => !hiddenCategories.includes(c)),
+    [allCategories, hiddenCategories]
+  );
+
+  function categoryOptionsFor(current) {
+    return visibleCategories.includes(current) ? visibleCategories : [...visibleCategories, current];
+  }
+
+  function addBill() {
+    if (!form.name.trim() || !form.amount) return;
+    updateBills([...bills, {
+      id: uid(), name: form.name.trim(), amount: parseFloat(form.amount) || 0,
+      dueDay: parseInt(form.dueDay) || 1, category: form.category, paidMonths: [],
+    }]);
+    setForm({ name: '', amount: '', dueDay: '1', category: 'Utilities' });
+    setShowAdd(false);
+  }
+
+  function togglePaid(id) {
+    updateBills(bills.map((b) => {
+      if (b.id !== id) return b;
+      const paid = b.paidMonths || [];
+      const isPaid = paid.includes(month);
+      return { ...b, paidMonths: isPaid ? paid.filter((m) => m !== month) : [...paid, month] };
+    }));
+  }
+
+  function updateBillField(id, field, value) {
+    updateBills(bills.map((b) => (b.id === id ? { ...b, [field]: value } : b)));
+  }
+
+  function removeBill(id) {
+    updateBills(bills.filter((b) => b.id !== id));
+  }
+
+  const sorted = [...bills].sort((a, b) => a.dueDay - b.dueDay);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Recurring bills</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Toggling paid applies to {monthLabel(month)}.</p>
+        </div>
+        <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New bill</PrimaryButton>
+      </div>
+
+      {showAdd && (
+        <Card>
+          <div className="grid sm:grid-cols-4 gap-3 items-end">
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Name</label>
+              <TextInput placeholder="e.g. Internet" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Amount</label>
+              <TextInput type="number" min="0" step="0.01" placeholder="0.00" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Due day</label>
+              <TextInput type="number" min="1" max="31" value={form.dueDay} onChange={(e) => setForm({ ...form, dueDay: e.target.value })} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Category</label>
+              <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                {visibleCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+              </Select>
+            </div>
+            <div className="sm:col-span-4">
+              <PrimaryButton onClick={addBill}><Check size={15} /> Save bill</PrimaryButton>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {sorted.length === 0 ? (
+        <Card><EmptyState icon={CalendarClock} title="No bills added" subtitle="Add the subscriptions and bills you pay every month." /></Card>
+      ) : (
+        <Card style={{ padding: 0 }}>
+          <div className="divide-y" style={{ borderColor: COLORS.border }}>
+            {sorted.map((b) => {
+              const isPaid = (b.paidMonths || []).includes(month);
+              const billCategoryOptions = categoryOptionsFor(b.category);
+              return (
+                <div key={b.id} className="flex items-center justify-between px-4 py-3 gap-3">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <button
+                      onClick={() => togglePaid(b.id)}
+                      className="rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0"
+                      style={{ background: isPaid ? COLORS.teal : '#EEEBFA', color: isPaid ? '#fff' : COLORS.inkSoft }}
+                    >
+                      {isPaid && <Check size={14} />}
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <input
+                        key={`name-${b.id}`}
+                        defaultValue={b.name}
+                        onBlur={(e) => {
+                          e.target.style.borderColor = 'transparent';
+                          e.target.style.background = 'transparent';
+                          updateBillField(b.id, 'name', e.target.value.trim() || b.name);
+                        }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                        className="font-body font-semibold text-sm rounded-lg px-1.5 py-0.5 outline-none w-full"
+                        style={{ color: COLORS.ink, textDecoration: isPaid ? 'line-through' : 'none', border: `1.5px solid transparent`, background: 'transparent' }}
+                        onFocus={(e) => { e.target.style.borderColor = COLORS.violet; e.target.style.background = '#fff'; }}
+                      />
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                        <CategoryEditCell value={b.category} options={billCategoryOptions} onChange={(cat) => updateBillField(b.id, 'category', cat)} />
+                        <div className="flex items-center gap-1">
+                          <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Due day</span>
+                          <input
+                            key={`day-${b.id}`}
+                            type="number" min="1" max="31"
+                            defaultValue={b.dueDay}
+                            onBlur={(e) => {
+                              const v = parseInt(e.target.value);
+                              updateBillField(b.id, 'dueDay', Number.isFinite(v) ? Math.min(31, Math.max(1, v)) : b.dueDay);
+                            }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                            className="font-body text-xs rounded-lg px-1.5 py-0.5 outline-none"
+                            style={{ width: 40, color: COLORS.inkSoft, border: `1.5px solid ${COLORS.border}` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <div className="flex items-center gap-0.5">
+                      <span className="font-display font-semibold text-sm" style={{ color: COLORS.ink }}>$</span>
+                      <input
+                        key={`amt-${b.id}`}
+                        type="number" min="0" step="0.01"
+                        defaultValue={b.amount}
+                        onBlur={(e) => updateBillField(b.id, 'amount', Math.abs(parseFloat(e.target.value)) || 0)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                        className="font-display font-semibold text-sm rounded-lg px-1.5 py-0.5 outline-none text-right"
+                        style={{ width: 70, color: COLORS.ink, border: `1.5px solid ${COLORS.border}` }}
+                      />
+                    </div>
+                    <button onClick={() => removeBill(b.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500"><Trash2 size={15} /></button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------- Settings ---------------------------------- */
+
+function NotesSection({ notes, updateNotes }) {
+  const [text, setText] = useState(notes);
+  const [saved, setSaved] = useState(true);
+
+  useEffect(() => { setText(notes); }, [notes]);
+
+  function handleChange(e) {
+    setText(e.target.value);
+    setSaved(false);
+  }
+
+  function handleBlur() {
+    if (text !== notes) updateNotes(text);
+    setSaved(true);
+  }
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Notes</h3>
+        <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{saved ? 'Saved' : 'Saving...'}</span>
+      </div>
+      <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+        Shared with everyone in this household &mdash; a good place to write down category definitions, rules of thumb, or anything you want to stay on the same page about.
+      </p>
+      <textarea
+        value={text}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        rows={8}
+        placeholder={`e.g.\nGroceries = food + household supplies\nShopping = anything from Amazon that isn't a gift\nDining Out = restaurants, coffee, takeout`}
+        className="w-full rounded-xl px-3 py-2 text-sm font-body outline-none resize-y"
+        style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink }}
+        onFocus={(e) => { e.target.style.borderColor = COLORS.violet; }}
+      />
+    </Card>
+  );
+}
+
+// Shared by the full "Categories" section in Settings and the lighter-weight
+// "Manage categories" modal opened from the Ledger — one implementation of
+// hide/restore/rename/recolor instead of two.
+function CategoryManager({ budgets, transactions, goals, hiddenCategories, updateHiddenCategories, renameCategory, categoryColors, updateCategoryColors }) {
+  const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
+  const budgetCategorySet = useMemo(() => new Set(Object.keys(budgets)), [budgets]);
+  const allCategories = useMemo(() => {
+    const set = new Set([...DEFAULT_EXPENSE_CATEGORIES, ...Object.keys(budgets), 'Income']);
+    transactions.forEach((t) => { if (!bucketNameSet.has(t.category)) set.add(t.category); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [budgets, transactions, bucketNameSet]);
+  const visibleCategories = useMemo(
+    () => allCategories.filter((c) => !hiddenCategories.includes(c)),
+    [allCategories, hiddenCategories]
+  );
+
+  const [editingCat, setEditingCat] = useState(null);
+  const [editValue, setEditValue] = useState('');
+  const [colorPickerOpen, setColorPickerOpen] = useState({});
+
+  function hideCategory(cat) {
+    if (!hiddenCategories.includes(cat)) updateHiddenCategories([...hiddenCategories, cat]);
+  }
+  function restoreCategory(cat) {
+    updateHiddenCategories(hiddenCategories.filter((c) => c !== cat));
+  }
+
+  function startEditing(cat) {
+    setEditingCat(cat);
+    setEditValue(cat);
+  }
+
+  function confirmRename() {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== editingCat) {
+      renameCategory(editingCat, trimmed);
+    }
+    setEditingCat(null);
+  }
+
+  function toggleColorPicker(cat) {
+    setColorPickerOpen((prev) => ({ ...prev, [cat]: !prev[cat] }));
+  }
+
+  function setCategoryColor(cat, color) {
+    updateCategoryColors({ ...categoryColors, [cat]: color });
+  }
+
+  return (
+    <div className="grid sm:grid-cols-2 gap-4">
+        <div>
+          <p className="font-body text-xs font-semibold mb-1.5" style={{ color: COLORS.inkSoft }}>In use</p>
+          <div className="space-y-1.5">
+            {visibleCategories.filter((c) => c !== 'Income').map((cat) => (
+              <div key={cat}>
+                <div className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                  {editingCat === cat ? (
+                    <div className="flex items-center gap-1 flex-1 mr-2">
+                      <TextInput
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') confirmRename(); if (e.key === 'Escape') setEditingCat(null); }}
+                        autoFocus
+                        style={{ padding: '4px 8px', fontSize: 12 }}
+                      />
+                      <button onClick={confirmRename} style={{ color: COLORS.teal }}><Check size={15} /></button>
+                      <button onClick={() => setEditingCat(null)} style={{ color: COLORS.inkSoft }}><X size={15} /></button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <CategoryBadge cat={cat} />
+                      {!budgetCategorySet.has(cat) && (
+                        <span className="font-body text-xs" style={{ color: COLORS.inkSoft }} title="Not in your budget — added automatically">Auto</span>
+                      )}
+                    </div>
+                  )}
+                  {editingCat !== cat && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => toggleColorPicker(cat)}
+                        style={{ color: colorPickerOpen[cat] ? COLORS.violet : COLORS.inkSoft }}
+                        className="hover:text-violet-600"
+                        title="Change color"
+                      >
+                        <Palette size={13} />
+                      </button>
+                      <button onClick={() => startEditing(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-violet-600" title="Rename">
+                        <Settings2 size={13} />
+                      </button>
+                      <button onClick={() => hideCategory(cat)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Hide from dropdowns">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {colorPickerOpen[cat] && (
+                  <div className="px-3 py-2">
+                    <CategoryColorPicker current={categoryColor(cat, categoryColors)} onChange={(c) => setCategoryColor(cat, c)} />
+                  </div>
+                )}
+              </div>
+            ))}
+            {visibleCategories.filter((c) => c !== 'Income').length === 0 && (
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>No categories to show &mdash; everything's hidden.</p>
+            )}
+          </div>
+        </div>
+        <div>
+          <p className="font-body text-xs font-semibold mb-1.5" style={{ color: COLORS.inkSoft }}>Hidden</p>
+          {hiddenCategories.length === 0 ? (
+            <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Nothing hidden yet.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {hiddenCategories.filter((c) => allCategories.includes(c)).map((cat) => (
+                <div key={cat} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg, opacity: 0.6 }}>
+                  <CategoryBadge cat={cat} />
+                  <button onClick={() => restoreCategory(cat)} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>
+                    Restore
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+  );
+}
+
+function CategoriesSection(props) {
+  return (
+    <Card>
+      <h3 className="font-display font-semibold mb-2" style={{ color: COLORS.ink }}>Categories</h3>
+      <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+        Hide categories you don't use to declutter the dropdowns everywhere in the app. Click the pencil to rename one &mdash; useful for categories the app auto-added from Plaid that don't quite match how you think about them. Renaming updates every transaction, budget, and bill using that category.
+      </p>
+      <CategoryManager {...props} />
+    </Card>
+  );
+}
+
+function AnnualAccountSection({ accounts, annualAccountId, updateAnnualAccountId }) {
+  const savingsAccounts = (accounts || []).filter(isSavingsAccount);
+
+  return (
+    <Card>
+      <h3 className="font-display font-semibold mb-2" style={{ color: COLORS.ink }}>Annual tracking</h3>
+      <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+        Pick which connected account behaves like an active fund with money flowing in and out (not just long-term savings) &mdash; it'll get its own "Annual" tab instead of sitting in Savings.
+      </p>
+      {savingsAccounts.length === 0 ? (
+        <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Connect a savings account on the Accounts tab first.</p>
+      ) : (
+        <Select value={annualAccountId || ''} onChange={(e) => updateAnnualAccountId(e.target.value || null)} style={{ maxWidth: 320 }}>
+          <option value="">None</option>
+          {savingsAccounts.map((a) => (
+            <option key={a.id} value={a.id}>{a.name}{a.mask ? ` ••${a.mask}` : ''}</option>
+          ))}
+        </Select>
+      )}
+    </Card>
+  );
+}
+
+function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory, categoryColors, updateCategoryColors }) {
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Settings</h2>
+        <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Notes, categories, and recurring bills, all in one place.</p>
+      </div>
+
+      <NotesSection notes={notes} updateNotes={updateNotes} />
+      <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
+      <AnnualAccountSection accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} />
+      <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />
+    </div>
+  );
+}
+
+
+/* ---------------------------------- Accounts ---------------------------------- */
+
+function ConnectBankButton({ onConnected }) {
+  const [linkToken, setLinkToken] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function startConnect() {
+    setBusy(true);
+    setError('');
+    try {
+      const createLinkToken = httpsCallable(functions, 'createLinkToken');
+      const resp = await createLinkToken();
+      setLinkToken(resp.data.linkToken);
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+
+  const { open, ready } = usePlaidLink({
+    token: linkToken,
+    onSuccess: async (publicToken, metadata) => {
+      const startedAt = Date.now();
+      try {
+        const exchangePublicToken = httpsCallable(functions, 'exchangePublicToken');
+        const resp = await exchangePublicToken({ publicToken, institutionName: metadata?.institution?.name });
+        onConnected(resp.data, startedAt);
+      } catch (e) {
+        setError(e.message);
+      } finally {
+        setBusy(false);
+        setLinkToken(null);
+      }
+    },
+    onExit: () => {
+      setBusy(false);
+      setLinkToken(null);
+    },
+  });
+
+  useEffect(() => {
+    if (linkToken && ready) open();
+  }, [linkToken, ready]);
+
+  return (
+    <div>
+      <PrimaryButton onClick={startConnect} disabled={busy}>
+        <Landmark size={15} /> Connect a bank
+      </PrimaryButton>
+      {error && <p className="font-body text-xs mt-2" style={{ color: COLORS.coral }}>{error}</p>}
+    </div>
+  );
+}
+
+function AccountsView({ accounts, transactions, updateTransactions }) {
+  const [syncing, setSyncing] = useState(false);
+  const [disconnectingId, setDisconnectingId] = useState(null);
+  const [error, setError] = useState('');
+  const [lastSync, setLastSync] = useState(null);
+  const [syncPopup, setSyncPopup] = useState(null); // { summary, startedAt }
+  const [showReviewModal, setShowReviewModal] = useState(false);
+
+  const pendingReview = useMemo(() => transactions.filter((t) => t.pendingRemoval), [transactions]);
+
+  async function handleSync() {
+    setSyncing(true);
+    setError('');
+    const startedAt = Date.now();
+    try {
+      const syncHousehold = httpsCallable(functions, 'syncHousehold');
+      const resp = await syncHousehold();
+      setLastSync(resp.data);
+      setSyncPopup({ summary: resp.data, startedAt });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  function handleConnected(summary, startedAt) {
+    setLastSync(summary);
+    setSyncPopup({ summary, startedAt });
+  }
+
+  function summaryText(s) {
+    if (!s) return null;
+    const parts = [];
+    if (s.added) parts.push(`${s.added} new`);
+    if (s.modified) parts.push(`${s.modified} updated`);
+    if (s.removed) parts.push(`${s.removed} flagged by bank`);
+    if (s.deduped) parts.push(`${s.deduped} possible duplicate${s.deduped > 1 ? 's' : ''}`);
+    return parts.length ? parts.join(', ') : 'No changes';
+  }
+
+  function keepTransaction(id) {
+    updateTransactions(transactions.map((t) => (
+      t.id === id ? { ...t, pendingRemoval: false, pendingRemovalReason: undefined, duplicateOfId: undefined } : t
+    )));
+  }
+
+  function deleteTransaction(id) {
+    updateTransactions(transactions.filter((t) => t.id !== id));
+  }
+
+  function keepAllPending() {
+    const ids = new Set(pendingReview.map((t) => t.id));
+    updateTransactions(transactions.map((t) => (
+      ids.has(t.id) ? { ...t, pendingRemoval: false, pendingRemovalReason: undefined, duplicateOfId: undefined } : t
+    )));
+  }
+
+  function deleteAllPending() {
+    if (!window.confirm(`Delete all ${pendingReview.length} flagged transaction(s)? This can't be undone.`)) return;
+    const ids = new Set(pendingReview.map((t) => t.id));
+    updateTransactions(transactions.filter((t) => !ids.has(t.id)));
+  }
+
+  async function handleDisconnect(itemId, institutionName) {
+    if (!window.confirm(`Disconnect ${institutionName}? Its accounts will be removed, and it will stop pulling new transactions. Past imported transactions stay in your Ledger.`)) return;
+    setDisconnectingId(itemId);
+    setError('');
+    try {
+      const disconnectBank = httpsCallable(functions, 'disconnectBank');
+      await disconnectBank({ itemId });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDisconnectingId(null);
+    }
+  }
+
+  const total = accounts.reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const byItem = {};
+  accounts.forEach((a) => {
+    const key = a.itemId || a.institutionName || 'bank';
+    if (!byItem[key]) byItem[key] = { institutionName: a.institutionName || 'Bank', accounts: [] };
+    byItem[key].accounts.push(a);
+  });
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Accounts</h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Connected banks and their latest balances.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {pendingReview.length > 0 && (
+            <button
+              onClick={() => setShowReviewModal(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold font-body"
+              style={{ color: COLORS.coral, background: '#FFE9E9' }}
+            >
+              <Flame size={14} /> {pendingReview.length} need{pendingReview.length === 1 ? 's' : ''} review
+            </button>
+          )}
+          {accounts.length > 0 && (
+            <GhostButton onClick={handleSync}>
+              <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing...' : 'Sync now'}
+            </GhostButton>
+          )}
+          <ConnectBankButton onConnected={handleConnected} />
+        </div>
+      </div>
+
+      {error && <p className="font-body text-xs" style={{ color: COLORS.coral }}>{error}</p>}
+      {!error && lastSync && (
+        <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Last sync: {summaryText(lastSync)}</p>
+      )}
+
+      {accounts.length === 0 ? (
+        <Card><EmptyState icon={Landmark} title="No banks connected yet" subtitle="Click Connect a bank above to securely link a checking, savings, or credit account via Plaid." /></Card>
+      ) : (
+        <>
+          <Card>
+            <div className="flex items-center gap-2 mb-1" style={{ color: COLORS.violet }}>
+              <Wallet size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Total across accounts</span>
+            </div>
+            <p className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>{formatCurrency(total)}</p>
+          </Card>
+
+          {Object.entries(byItem).map(([itemId, { institutionName, accounts: accts }]) => (
+            <Card key={itemId}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>{institutionName}</h3>
+                <button
+                  onClick={() => handleDisconnect(itemId, institutionName)}
+                  disabled={disconnectingId === itemId}
+                  className="font-body text-xs font-semibold rounded-full px-2.5 py-1 disabled:opacity-50"
+                  style={{ color: COLORS.coral, background: '#FFE9E9' }}
+                >
+                  {disconnectingId === itemId ? 'Disconnecting...' : 'Disconnect'}
+                </button>
+              </div>
+              <div className="space-y-2">
+                {accts.map((a) => (
+                  <div key={a.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                    <div>
+                      <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{a.name}{a.mask ? ` ••${a.mask}` : ''}</p>
+                      <p className="font-body text-xs capitalize" style={{ color: COLORS.inkSoft }}>{a.subtype || a.type}</p>
+                    </div>
+                    <span className="font-display font-semibold text-sm" style={{ color: COLORS.ink }}>{formatCurrency(a.balance)}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ))}
+        </>
+      )}
+
+      {syncPopup && (() => {
+        const syncTs = syncPopup.summary?.syncTimestamp;
+        const newTx = transactions
+          .filter((t) => t.addedAt && syncTs && t.addedAt === syncTs && !t.pendingRemoval)
+          .sort((a, b) => b.date.localeCompare(a.date));
+        const flagged = transactions.filter((t) => t.pendingRemoval);
+        return (
+          <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+            <Card style={{ maxWidth: 520, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Sync results</h3>
+                <button onClick={() => setSyncPopup(null)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+              </div>
+
+              {newTx.length === 0 && flagged.length === 0 ? (
+                <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>No new activity this time.</p>
+              ) : (
+                <>
+                  {newTx.length > 0 && (
+                    <div className="mb-4">
+                      <p className="font-body text-xs font-semibold mb-2" style={{ color: COLORS.inkSoft }}>
+                        {newTx.length} new transaction{newTx.length > 1 ? 's' : ''}
+                      </p>
+                      <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                        {newTx.map((t) => (
+                          <div key={t.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                            <div className="min-w-0">
+                              <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{t.date} &middot; {t.category}</p>
+                            </div>
+                            <span className="font-display font-semibold text-sm flex-shrink-0 ml-2" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                              {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {flagged.length > 0 && (
+                    <div className="rounded-xl px-3 py-2.5" style={{ background: '#FFFBF0', border: `1px solid ${COLORS.gold}` }}>
+                      <p className="font-body text-sm font-semibold mb-1" style={{ color: COLORS.ink }}>
+                        {flagged.length} transaction{flagged.length > 1 ? 's' : ''} need{flagged.length === 1 ? 's' : ''} your review
+                      </p>
+                      <p className="font-body text-xs mb-2" style={{ color: COLORS.inkSoft }}>
+                        Either your bank says these are gone, or they look like duplicates from reconnecting an account.
+                      </p>
+                      <button
+                        onClick={() => { setSyncPopup(null); setShowReviewModal(true); }}
+                        className="font-body text-xs font-semibold"
+                        style={{ color: COLORS.violet }}
+                      >
+                        Review now &rarr;
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </Card>
+          </div>
+        );
+      })()}
+
+      {showReviewModal && (
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+          <Card style={{ maxWidth: 560, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Review flagged transactions</h3>
+              <button onClick={() => setShowReviewModal(false)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+            </div>
+            {pendingReview.length === 0 ? (
+              <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Nothing to review right now.</p>
+            ) : (
+              <>
+                <div className="space-y-2 mb-4 max-h-96 overflow-y-auto">
+                  {pendingReview.map((t) => (
+                    <div key={t.id} className="rounded-xl px-3 py-2.5" style={{ background: COLORS.bg }}>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="min-w-0">
+                          <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                          <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                            {t.date} &middot; {t.pendingRemovalReason === 'duplicate' ? 'Possible duplicate' : "Bank says this is gone"}
+                          </p>
+                        </div>
+                        <span className="font-display font-semibold text-sm flex-shrink-0" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                          {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => keepTransaction(t.id)}
+                          className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-semibold font-body"
+                          style={{ background: `${COLORS.teal}22`, color: COLORS.teal }}
+                        >
+                          <Check size={12} /> Keep
+                        </button>
+                        <button
+                          onClick={() => deleteTransaction(t.id)}
+                          className="flex-1 inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-semibold font-body"
+                          style={{ background: '#FFE9E9', color: COLORS.coral }}
+                        >
+                          <Trash2 size={12} /> Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-between items-center">
+                  <button onClick={deleteAllPending} className="font-body text-xs font-semibold" style={{ color: COLORS.coral }}>
+                    Delete all
+                  </button>
+                  <GhostButton onClick={keepAllPending}>
+                    <Check size={14} /> Keep all
+                  </GhostButton>
+                </div>
+              </>
+            )}
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------- App ---------------------------------- */
+
+const TABS = [
+  { id: 'dashboard', label: 'Dashboard', icon: Wallet },
+  { id: 'ledger', label: 'Ledger', icon: Receipt },
+  { id: 'accounts', label: 'Accounts', icon: Landmark },
+  { id: 'budgets', label: 'Budgets', icon: PiggyBank },
+  { id: 'savings', label: 'Savings', icon: Coins },
+  { id: 'annual', label: 'Annual', icon: CalendarClock },
+  { id: 'settings', label: 'Settings', icon: Settings2 },
+];
+
+export default function App() {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [user, setUser] = useState(null);
+  const [householdId, setHouseholdId] = useState(null);
+  const [householdLookupDone, setHouseholdLookupDone] = useState(false);
+  const [inviteCode, setInviteCode] = useState('');
+
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('dashboard');
+  const [month, setMonth] = useState(currentMonthStr());
+  const [ledgerCatFilter, setLedgerCatFilter] = useState('All');
+  const [ledgerSourceFilter, setLedgerSourceFilter] = useState('All');
+  const [ledgerTypeFilter, setLedgerTypeFilter] = useState('All');
+  const [ledgerBucketFilter, setLedgerBucketFilter] = useState(null);
+  const [transactions, setTransactions] = useState([]);
+  const [budgets, setBudgets] = useState({});
+  const [goals, setGoals] = useState([]);
+  const [bills, setBills] = useState([]);
+  const [categoryColors, setCategoryColors] = useState({});
+  const [hiddenCategories, setHiddenCategories] = useState([]);
+  const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
+  const [accounts, setAccounts] = useState([]);
+  const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [notes, setNotes] = useState('');
+  const [annualAccountId, setAnnualAccountId] = useState(null);
+
+  // Track sign-in state.
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+      setHouseholdId(null);
+      setHouseholdLookupDone(false);
+    });
+    return unsub;
+  }, []);
+
+  // Once signed in, look up which household this account belongs to.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid));
+        if (!cancelled) {
+          setHouseholdId(snap.exists() ? snap.data().householdId || null : null);
+          setHouseholdLookupDone(true);
+        }
+      } catch (e) {
+        console.error('Household lookup failed', e);
+        if (!cancelled) setHouseholdLookupDone(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  // Once a household is known, subscribe to it live.
+  useEffect(() => {
+    if (!householdId) return;
+    setLoading(true);
+    const ref = doc(db, 'households', householdId);
+    const unsub = onSnapshot(ref, (snap) => {
+      const d = snap.data();
+      setTransactions(d?.transactions || []);
+      setBudgets(d?.budgets || {});
+      setGoals(d?.goals || []);
+      setBills(d?.bills || []);
+      setCategoryColors(d?.categoryColors || {});
+      setHiddenCategories(d?.hiddenCategories || []);
+      setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
+      setAccounts(d?.accounts || []);
+      setLastSyncAt(d?.lastSyncAt || null);
+      setNotes(d?.notes || '');
+      setAnnualAccountId(d?.annualAccountId || null);
+      setInviteCode(d?.inviteCode || '');
+      setLoading(false);
+    }, (err) => {
+      console.error('Sync failed', err);
+      setLoading(false);
+    });
+    return unsub;
+  }, [householdId]);
+
+  function syncField(field, value) {
+    if (!householdId) return;
+    setDoc(doc(db, 'households', householdId), { [field]: value }, { merge: true })
+      .catch((e) => {
+        console.error('Save failed', e);
+        window.alert(`Couldn't save your change — it may not persist. (${e.message})`);
+      });
+  }
+
+  async function createHousehold() {
+    const householdRef = doc(collection(db, 'households'));
+    const code = generateInviteCode();
+    await setDoc(householdRef, {
+      members: [user.uid],
+      inviteCode: code,
+      transactions: [], budgets: {}, goals: [], bills: [],
+      categoryColors: {}, hiddenCategories: [], categoryMemory: { exact: {}, merchant: {} },
+    });
+    await setDoc(doc(db, 'invites', code), { householdId: householdRef.id });
+    await setDoc(doc(db, 'users', user.uid), { householdId: householdRef.id }, { merge: true });
+    setHouseholdId(householdRef.id);
+  }
+
+  async function joinHousehold(code) {
+    const inviteSnap = await getDoc(doc(db, 'invites', code.toUpperCase()));
+    if (!inviteSnap.exists()) throw new Error("That invite code wasn't found. Double check it with whoever sent it.");
+    const { householdId: joinedId } = inviteSnap.data();
+    await updateDoc(doc(db, 'households', joinedId), { members: arrayUnion(user.uid) });
+    await setDoc(doc(db, 'users', user.uid), { householdId: joinedId }, { merge: true });
+    setHouseholdId(joinedId);
+  }
+
+  function updateTransactions(next) { setTransactions(next); syncField('transactions', next); }
+  function updateBudgets(next) { setBudgets(next); syncField('budgets', next); }
+  function updateGoals(next) { setGoals(next); syncField('goals', next); }
+  function updateBills(next) { setBills(next); syncField('bills', next); }
+  function updateCategoryColors(next) { setCategoryColors(next); syncField('categoryColors', next); }
+  function updateHiddenCategories(next) { setHiddenCategories(next); syncField('hiddenCategories', next); }
+  function updateCategoryMemory(next) { setCategoryMemory(next); syncField('categoryMemory', next); }
+  function updateNotes(next) { setNotes(next); syncField('notes', next); }
+  function updateAnnualAccountId(next) { setAnnualAccountId(next); syncField('annualAccountId', next); }
+
+  function renameCategory(oldName, newName) {
+    if (!newName || newName === oldName) return;
+
+    const nextTransactions = transactions.map((t) => {
+      let next = t;
+      if (t.category === oldName) next = { ...next, category: newName };
+      if (t.splits && t.splits.some((s) => s.category === oldName)) {
+        next = { ...next, splits: t.splits.map((s) => (s.category === oldName ? { ...s, category: newName } : s)) };
+      }
+      return next;
+    });
+    updateTransactions(nextTransactions);
+
+    if (Object.prototype.hasOwnProperty.call(budgets, oldName)) {
+      const nextBudgets = { ...budgets };
+      nextBudgets[newName] = nextBudgets[oldName];
+      delete nextBudgets[oldName];
+      updateBudgets(nextBudgets);
+    }
+
+    if (categoryColors[oldName]) {
+      const nextColors = { ...categoryColors };
+      nextColors[newName] = nextColors[oldName];
+      delete nextColors[oldName];
+      updateCategoryColors(nextColors);
+    }
+
+    if (hiddenCategories.includes(oldName)) {
+      updateHiddenCategories(hiddenCategories.map((c) => (c === oldName ? newName : c)));
+    }
+
+    const nextExact = {};
+    Object.entries(categoryMemory.exact || {}).forEach(([k, v]) => { nextExact[k] = v === oldName ? newName : v; });
+    const nextMerchant = {};
+    Object.entries(categoryMemory.merchant || {}).forEach(([k, v]) => { nextMerchant[k] = v === oldName ? newName : v; });
+    updateCategoryMemory({ exact: nextExact, merchant: nextMerchant });
+
+    if (bills.some((b) => b.category === oldName)) {
+      updateBills(bills.map((b) => (b.category === oldName ? { ...b, category: newName } : b)));
+    }
+  }
+
+  function goToLedger(type, source) {
+    setLedgerTypeFilter(type || 'All');
+    setLedgerSourceFilter(source || 'All');
+    setLedgerCatFilter('All');
+    setLedgerBucketFilter(null);
+    setTab('ledger');
+  }
+
+  function goToLedgerBucket(bucketId) {
+    setLedgerTypeFilter('All');
+    setLedgerSourceFilter('All');
+    setLedgerCatFilter('All');
+    setLedgerBucketFilter(bucketId);
+    setTab('ledger');
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
+        <Loader2 size={26} className="animate-spin" style={{ color: COLORS.violet }} />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthGate />;
+  }
+
+  if (!householdLookupDone) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
+        <Loader2 size={26} className="animate-spin" style={{ color: COLORS.violet }} />
+      </div>
+    );
+  }
+
+  if (!householdId) {
+    return <HouseholdSetup onCreate={createHousehold} onJoin={joinHousehold} />;
+  }
+
+  return (
+    <CategoryColorContext.Provider value={categoryColors}>
+    <div className="min-h-screen font-body" style={{ background: COLORS.bg }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+        .font-display { font-family: 'Fredoka', sans-serif; }
+        .font-body { font-family: 'Inter', sans-serif; }
+      `}</style>
+
+      <header className="px-5 sm:px-8 pt-6 pb-4 flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span style={{ fontSize: 26 }}>🫙</span>
+            <h1 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Family Budget</h1>
+          </div>
+          <p className="font-body text-sm mt-0.5" style={{ color: COLORS.inkSoft }}>Your shared money, in one place.</p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {inviteCode && (
+            <button
+              onClick={() => { navigator.clipboard?.writeText(inviteCode); }}
+              className="font-body text-xs font-semibold rounded-full px-3 py-1.5"
+              style={{ color: COLORS.violet, background: COLORS.violetSoft }}
+              title="Invite code — click to copy, share with family members"
+            >
+              Invite: {inviteCode}
+            </button>
+          )}
+          <button
+            onClick={() => signOut(auth)}
+            className="font-body text-xs font-semibold rounded-full px-3 py-1.5"
+            style={{ color: COLORS.inkSoft, background: COLORS.surface, border: `1px solid ${COLORS.border}` }}
+          >
+            Sign out
+          </button>
+        </div>
+      </header>
+
+      <nav className="px-5 sm:px-8">
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className="flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold font-body whitespace-nowrap transition-colors"
+                style={active
+                  ? { background: COLORS.violet, color: '#fff', boxShadow: '0 3px 10px rgba(124,92,252,0.35)' }
+                  : { background: COLORS.surface, color: COLORS.inkSoft, border: `1px solid ${COLORS.border}` }}
+              >
+                <Icon size={15} /> {t.label}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      <main className="px-5 sm:px-8 py-6 max-w-6xl mx-auto">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-24">
+            <Loader2 size={26} className="animate-spin" style={{ color: COLORS.violet }} />
+            <p className="font-body text-sm mt-3" style={{ color: COLORS.inkSoft }}>Loading your data...</p>
+          </div>
+        ) : (
+          <>
+            {tab === 'dashboard' && (
+              <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} />
+            )}
+            {tab === 'ledger' && (
+              <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} catFilter={ledgerCatFilter} setCatFilter={setLedgerCatFilter} sourceFilter={ledgerSourceFilter} setSourceFilter={setLedgerSourceFilter} typeFilter={ledgerTypeFilter} setTypeFilter={setLedgerTypeFilter} lastSyncAt={lastSyncAt} bucketFilter={ledgerBucketFilter} setBucketFilter={setLedgerBucketFilter} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
+            )}
+            {tab === 'accounts' && (
+              <AccountsView accounts={accounts} transactions={transactions} updateTransactions={updateTransactions} />
+            )}
+            {tab === 'budgets' && (
+              <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} />
+            )}
+            {tab === 'savings' && (
+              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} annualAccountId={annualAccountId} goToLedgerBucket={goToLedgerBucket} />
+            )}
+            {tab === 'annual' && (
+              <AnnualView accounts={accounts} goals={goals} updateGoals={updateGoals} setTab={setTab} goToLedgerBucket={goToLedgerBucket} annualAccountId={annualAccountId} />
+            )}
+            {tab === 'settings' && (
+              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
+            )}
+          </>
+        )}
+      </main>
+    </div>
+    </CategoryColorContext.Provider>
+  );
+}

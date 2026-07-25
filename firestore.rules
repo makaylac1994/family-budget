@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    match /invites/{code} {
+      // "get" (fetch by known code) is allowed, but not "list" — otherwise
+      // any signed-in user could enumerate every household's invite code.
+      allow get: if request.auth != null;
+      allow list: if false;
+      allow create: if request.auth != null;
+      allow update, delete: if false;
+    }
+
+    match /households/{householdId} {
+      allow read: if request.auth != null && request.auth.uid in resource.data.members;
+      allow create: if request.auth != null && request.resource.data.members == [request.auth.uid];
+      // Current members may freely edit shared data (transactions, budgets, etc.),
+      // but may NOT touch 'members' itself — that would let one member remove
+      // another. The only way 'members' can change is the join case below,
+      // where someone adds themselves and nothing else changes.
+      allow update: if request.auth != null && request.auth.uid in resource.data.members
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['members']);
+
+      allow update: if request.auth != null
+        && request.resource.data.members == resource.data.members.concat([request.auth.uid])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members']);
+    }
+
+    // Plaid access tokens. These must NEVER be readable or writable from the
+    // browser — only Cloud Functions (via the Admin SDK, which bypasses these
+    // rules entirely) may touch this collection.
+    match /plaid_items/{itemId} {
+      allow read, write: if false;
+    }
+  }
+}
