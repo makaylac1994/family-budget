@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Papa from 'papaparse';
 import { db, auth, functions } from './firebase';
-import { doc, onSnapshot, setDoc, getDoc, updateDoc, arrayUnion, collection } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, arrayUnion, collection, writeBatch, deleteField } from 'firebase/firestore';
 import {
   onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
 } from 'firebase/auth';
@@ -9,7 +9,7 @@ import { httpsCallable } from 'firebase/functions';
 import { usePlaidLink } from 'react-plaid-link';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import {
-  Wallet, Receipt, PiggyBank, Target, CalendarClock, Upload, Plus, Trash2,
+  Wallet, Receipt, PiggyBank, Target, CalendarClock, Upload, Download, Plus, Trash2,
   Search, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, TrendingUp, TrendingDown, X, Check,
   Loader2, Sparkles, Flame, Scissors, Palette, Settings2, Coins, Landmark, RefreshCw,
   CreditCard, Repeat,
@@ -141,6 +141,24 @@ function merchantToken(desc) {
 
 function txSignature(t) {
   return `${t.date}|${Math.round(t.amount * 100)}|${t.type}|${normalizeDescription(t.description)}`;
+}
+
+// Which txMonths/{monthKey} bucket a transaction belongs to. Dates are always
+// 'YYYY-MM-DD' (see todayStr/normalizeDate) but this falls back safely for
+// any transaction that somehow doesn't have one, rather than throwing.
+function monthKeyOf(t) {
+  const d = t && t.date;
+  return typeof d === 'string' && /^\d{4}-\d{2}/.test(d) ? d.slice(0, 7) : 'unknown';
+}
+
+function groupTransactionsByMonth(list) {
+  const grouped = new Map();
+  for (const t of list) {
+    const key = monthKeyOf(t);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(t);
+  }
+  return grouped;
 }
 
 // Determines whether a transaction was paid from a bank account ('bank') or
@@ -601,11 +619,12 @@ function PrimaryButton({ children, onClick, style, type = 'button', disabled }) 
   );
 }
 
-function GhostButton({ children, onClick, style }) {
+function GhostButton({ children, onClick, style, disabled }) {
   return (
     <button
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold font-body transition-colors"
+      disabled={disabled}
+      className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold font-body transition-colors disabled:opacity-50"
       style={{ color: COLORS.violet, background: COLORS.violetSoft, ...style }}
     >
       {children}
@@ -3266,7 +3285,55 @@ function AnnualAccountSection({ accounts, annualAccountId, updateAnnualAccountId
   );
 }
 
-function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory, categoryColors, updateCategoryColors }) {
+function downloadTransactionsBackup(transactions) {
+  const blob = new Blob([JSON.stringify(transactions, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `family-budget-transactions-backup-${todayStr()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function DataBackupSection({ transactions, migrateLegacyTransactions }) {
+  const [migrating, setMigrating] = useState(false);
+
+  async function handleMigrate() {
+    const ok = window.confirm(
+      "This moves your saved transactions into the new storage format. We recommend downloading a backup first (button above) — have you done that? Continue?"
+    );
+    if (!ok) return;
+    setMigrating(true);
+    try {
+      await migrateLegacyTransactions();
+    } catch (e) {
+      window.alert(`Migration failed: ${e.message}. Nothing is removed unless it fully succeeds — safe to try again.`);
+    } finally {
+      setMigrating(false);
+    }
+  }
+
+  return (
+    <Card>
+      <h3 className="font-display font-semibold mb-2" style={{ color: COLORS.ink }}>Backup</h3>
+      <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+        Download a copy of all {transactions.length} transactions as a file on your computer &mdash; a safety net before any big change, or just for peace of mind.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <GhostButton onClick={() => downloadTransactionsBackup(transactions)}>
+          <Download size={15} /> Download transactions backup
+        </GhostButton>
+        <GhostButton onClick={handleMigrate} disabled={migrating}>
+          {migrating ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} Migrate old transaction storage
+        </GhostButton>
+      </div>
+    </Card>
+  );
+}
+
+function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory, categoryColors, updateCategoryColors, migrateLegacyTransactions }) {
   return (
     <div className="space-y-5">
       <div>
@@ -3278,6 +3345,7 @@ function SettingsView({ bills, updateBills, month, budgets, transactions, goals,
       <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
       <AnnualAccountSection accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} />
       <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />
+      <DataBackupSection transactions={transactions} migrateLegacyTransactions={migrateLegacyTransactions} />
     </div>
   );
 }
@@ -3637,7 +3705,12 @@ export default function App() {
   const [householdLookupDone, setHouseholdLookupDone] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
 
-  const [loading, setLoading] = useState(true);
+  const [householdDocReady, setHouseholdDocReady] = useState(false);
+  const [txMonthsReady, setTxMonthsReady] = useState(false);
+  const loading = !householdDocReady || !txMonthsReady;
+  // Last-known-in-Firestore content per txMonths/{monthKey} doc, so
+  // updateTransactions can diff against it and only write changed months.
+  const txMonthsRef = useRef(new Map());
   const [tab, setTab] = useState('dashboard');
   const [month, setMonth] = useState(currentMonthStr());
   const [ledgerCatFilter, setLedgerCatFilter] = useState('All');
@@ -3686,14 +3759,14 @@ export default function App() {
     return () => { cancelled = true; };
   }, [user]);
 
-  // Once a household is known, subscribe to it live.
+  // Once a household is known, subscribe to it live — everything except
+  // transactions, which live in the txMonths subcollection (below).
   useEffect(() => {
     if (!householdId) return;
-    setLoading(true);
+    setHouseholdDocReady(false);
     const ref = doc(db, 'households', householdId);
     const unsub = onSnapshot(ref, (snap) => {
       const d = snap.data();
-      setTransactions(d?.transactions || []);
       setBudgets(d?.budgets || {});
       setGoals(d?.goals || []);
       setBills(d?.bills || []);
@@ -3705,10 +3778,30 @@ export default function App() {
       setNotes(d?.notes || '');
       setAnnualAccountId(d?.annualAccountId || null);
       setInviteCode(d?.inviteCode || '');
-      setLoading(false);
+      setHouseholdDocReady(true);
     }, (err) => {
       console.error('Sync failed', err);
-      setLoading(false);
+      setHouseholdDocReady(true);
+    });
+    return unsub;
+  }, [householdId]);
+
+  // Transactions live in households/{id}/txMonths/{YYYY-MM} docs (bucketed by
+  // month) instead of one giant array on the household doc, so a single edit
+  // only ever has to rewrite the month(s) it actually touched.
+  useEffect(() => {
+    if (!householdId) return;
+    setTxMonthsReady(false);
+    const colRef = collection(db, 'households', householdId, 'txMonths');
+    const unsub = onSnapshot(colRef, (snap) => {
+      const grouped = new Map();
+      snap.forEach((docSnap) => grouped.set(docSnap.id, docSnap.data().transactions || []));
+      txMonthsRef.current = grouped;
+      setTransactions(Array.from(grouped.values()).flat());
+      setTxMonthsReady(true);
+    }, (err) => {
+      console.error('Transaction sync failed', err);
+      setTxMonthsReady(true);
     });
     return unsub;
   }, [householdId]);
@@ -3728,7 +3821,7 @@ export default function App() {
     await setDoc(householdRef, {
       members: [user.uid],
       inviteCode: code,
-      transactions: [], budgets: {}, goals: [], bills: [],
+      budgets: {}, goals: [], bills: [],
       categoryColors: {}, hiddenCategories: [], categoryMemory: { exact: {}, merchant: {} },
     });
     await setDoc(doc(db, 'invites', code), { householdId: householdRef.id });
@@ -3745,7 +3838,103 @@ export default function App() {
     setHouseholdId(joinedId);
   }
 
-  function updateTransactions(next) { setTransactions(next); syncField('transactions', next); }
+  function updateTransactions(next) {
+    setTransactions(next);
+    if (!householdId) return;
+
+    const nextGrouped = groupTransactionsByMonth(next);
+    const prevGrouped = txMonthsRef.current;
+    const allMonths = new Set([...prevGrouped.keys(), ...nextGrouped.keys()]);
+
+    const batch = writeBatch(db);
+    let hasChanges = false;
+
+    for (const month of allMonths) {
+      const nextArr = nextGrouped.get(month) || [];
+      const prevArr = prevGrouped.get(month) || [];
+      // Content comparison, not reference equality — most call sites rebuild
+      // the whole array via .map()/.filter() every time even when a given
+      // month's actual contents didn't change.
+      if (JSON.stringify(nextArr) === JSON.stringify(prevArr)) continue;
+      hasChanges = true;
+      const monthRef = doc(db, 'households', householdId, 'txMonths', month);
+      if (nextArr.length === 0) {
+        batch.delete(monthRef);
+      } else {
+        batch.set(monthRef, { transactions: nextArr });
+      }
+    }
+
+    if (!hasChanges) return;
+
+    // Optimistic local baseline so a rapid second edit (before the listener
+    // echoes this write back) diffs against what we just sent, not stale data.
+    txMonthsRef.current = nextGrouped;
+
+    batch.commit().catch((e) => {
+      console.error('Save failed', e);
+      window.alert(`Couldn't save your change — it may not persist. (${e.message})`);
+    });
+  }
+  // One-time cleanup for households created before transactions moved into
+  // txMonths: copies the old transactions array off the household doc into
+  // month-bucket docs, verifies the count, then removes the old field. Only
+  // ever does the full copy when txMonths is confirmed empty, so it can never
+  // stomp real edits made through the new storage after a first, interrupted
+  // attempt — see the guard below.
+  async function migrateLegacyTransactions() {
+    if (!householdId) return;
+    const householdRef = doc(db, 'households', householdId);
+    const snap = await getDoc(householdRef);
+    const legacy = snap.data()?.transactions;
+
+    if (!Array.isArray(legacy) || legacy.length === 0) {
+      window.alert('No old-format transactions to migrate — you may already be on the new storage.');
+      return;
+    }
+
+    const monthsSnap = await getDocs(collection(db, 'households', householdId, 'txMonths'));
+
+    if (!monthsSnap.empty) {
+      let liveCount = 0;
+      monthsSnap.forEach((d) => { liveCount += (d.data().transactions || []).length; });
+      if (liveCount === legacy.length) {
+        // Counts match: an earlier attempt wrote everything correctly, it just
+        // never got to remove the old field. Safe to finish that step only.
+        await setDoc(householdRef, { transactions: deleteField() }, { merge: true });
+        window.alert('Finished cleaning up old storage — nothing else to do.');
+      } else {
+        window.alert(
+          `Storage looks partially migrated (old field has ${legacy.length} transactions, new storage has ${liveCount}) ` +
+          `and the counts don't match. Stopping here rather than guessing — check the Firestore console before retrying.`
+        );
+      }
+      return;
+    }
+
+    const grouped = groupTransactionsByMonth(legacy);
+    const batch = writeBatch(db);
+    for (const [month, txs] of grouped) {
+      batch.set(doc(db, 'households', householdId, 'txMonths', month), { transactions: txs });
+    }
+    await batch.commit();
+
+    const verifySnap = await getDocs(collection(db, 'households', householdId, 'txMonths'));
+    let verifiedCount = 0;
+    verifySnap.forEach((d) => { verifiedCount += (d.data().transactions || []).length; });
+
+    if (verifiedCount !== legacy.length) {
+      window.alert(
+        `Migration verification failed: expected ${legacy.length}, found ${verifiedCount}. ` +
+        `The old data was NOT removed — nothing is lost. Please check the Firestore console before retrying.`
+      );
+      return;
+    }
+
+    await setDoc(householdRef, { transactions: deleteField() }, { merge: true });
+    window.alert(`Migration complete: ${legacy.length} transactions moved successfully.`);
+  }
+
   function updateBudgets(next) { setBudgets(next); syncField('budgets', next); }
   function updateGoals(next) { setGoals(next); syncField('goals', next); }
   function updateBills(next) { setBills(next); syncField('bills', next); }
@@ -3923,7 +4112,7 @@ export default function App() {
               <AnnualView accounts={accounts} goals={goals} updateGoals={updateGoals} setTab={setTab} goToLedgerBucket={goToLedgerBucket} annualAccountId={annualAccountId} />
             )}
             {tab === 'settings' && (
-              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
+              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} migrateLegacyTransactions={migrateLegacyTransactions} />
             )}
           </>
         )}

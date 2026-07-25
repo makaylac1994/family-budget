@@ -105,6 +105,24 @@ function txSignature(t) {
   return `${t.date}|${Math.round(t.amount * 100)}|${t.type}|${normalizeDescription(t.description)}`;
 }
 
+// Which txMonths/{monthKey} bucket a transaction belongs to. Must match
+// src/App.jsx's monthKeyOf exactly — client and server bucket the same way
+// so a transaction doesn't land in different buckets depending on which
+// side last wrote it.
+function monthKeyOf(tx) {
+  return typeof tx.date === 'string' && /^\d{4}-\d{2}/.test(tx.date) ? tx.date.slice(0, 7) : 'unknown';
+}
+
+function groupByMonth(list) {
+  const grouped = new Map();
+  for (const tx of list) {
+    const key = monthKeyOf(tx);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(tx);
+  }
+  return grouped;
+}
+
 async function syncHouseholdInternal(householdId) {
   const client = plaidClient();
   const itemsSnap = await db.collection('plaid_items').where('householdId', '==', householdId).get();
@@ -191,11 +209,20 @@ async function syncHouseholdInternal(householdId) {
   }
 
   let dedupedCount = 0;
+  const txMonthsRef = householdRef.collection('txMonths');
 
   await db.runTransaction(async (t) => {
-    const snap = await t.get(householdRef);
-    const data = snap.data() || {};
-    const existing = data.transactions || [];
+    // Transactions live in monthly bucket docs (households/{id}/txMonths/{YYYY-MM})
+    // rather than one array on the household doc, so a single edit anywhere in the
+    // app only ever has to rewrite the month(s) it actually touched. Read every
+    // bucket here to reassemble the full history for merging against Plaid.
+    const txMonthsSnap = await t.get(txMonthsRef);
+    const existing = [];
+    const priorMonthIds = new Set();
+    txMonthsSnap.forEach((docSnap) => {
+      priorMonthIds.add(docSnap.id);
+      existing.push(...(docSnap.data().transactions || []));
+    });
     const byPlaidId = new Map(existing.filter((tx) => tx.plaidTransactionId).map((tx) => [tx.plaidTransactionId, tx]));
 
     for (const [plaidId, val] of txUpdates) {
@@ -267,7 +294,19 @@ async function syncHouseholdInternal(householdId) {
     const nonPlaid = existing.filter((tx) => !tx.plaidTransactionId);
     const merged = [...nonPlaid, ...Array.from(byPlaidId.values())];
 
-    t.set(householdRef, { transactions: merged, accounts: allAccounts }, { merge: true });
+    const groupedMerged = groupByMonth(merged);
+    for (const [month, txs] of groupedMerged) {
+      t.set(txMonthsRef.doc(month), { transactions: txs });
+      priorMonthIds.delete(month);
+    }
+    // A month bucket that existed before but has zero transactions after
+    // merging (rare — Plaid removals just flag pendingRemoval rather than
+    // deleting entries, this is here for correctness/symmetry with the client).
+    for (const staleMonth of priorMonthIds) {
+      t.delete(txMonthsRef.doc(staleMonth));
+    }
+
+    t.set(householdRef, { accounts: allAccounts }, { merge: true });
   });
 
   return { added: addedCount, modified: modifiedCount, removed: removedCount, deduped: dedupedCount };

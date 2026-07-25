@@ -18,7 +18,7 @@ service cloud.firestore {
     match /households/{householdId} {
       allow read: if request.auth != null && request.auth.uid in resource.data.members;
       allow create: if request.auth != null && request.resource.data.members == [request.auth.uid];
-      // Current members may freely edit shared data (transactions, budgets, etc.),
+      // Current members may freely edit shared data (budgets, goals, bills, etc.),
       // but may NOT touch 'members' itself — that would let one member remove
       // another. The only way 'members' can change is the join case below,
       // where someone adds themselves and nothing else changes.
@@ -28,6 +28,15 @@ service cloud.firestore {
       allow update: if request.auth != null
         && request.resource.data.members == resource.data.members.concat([request.auth.uid])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members']);
+
+      // Transactions live here instead of on the household doc itself, bucketed
+      // by month, so a single edit only ever has to rewrite the month(s) it
+      // touched. Same membership check as the household doc — "read" (not just
+      // "get") is required since the app listens to the whole subcollection.
+      match /txMonths/{monthKey} {
+        allow read, write: if request.auth != null
+          && request.auth.uid in get(/databases/$(database)/documents/households/$(householdId)).data.members;
+      }
     }
 
     // Plaid access tokens. These must NEVER be readable or writable from the
