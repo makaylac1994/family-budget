@@ -258,6 +258,8 @@ async function syncHouseholdInternal(householdId) {
           pendingRemoval: existingTx.pendingRemoval,
           pendingRemovalReason: existingTx.pendingRemovalReason,
           duplicateOfId: existingTx.duplicateOfId,
+          flaggedForReview: existingTx.flaggedForReview,
+          note: existingTx.note,
           addedAt: existingTx.addedAt,
         });
       } else {

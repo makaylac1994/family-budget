@@ -3,7 +3,7 @@ import Papa from 'papaparse';
 import {
   PiggyBank, Upload, Plus, Trash2, Search, ChevronRight, ChevronDown, ChevronUp,
   TrendingUp, TrendingDown, X, Check, Sparkles, Flame, Scissors, Settings2, Repeat,
-  Receipt, CreditCard, Landmark, ArrowUpDown, Clock, Flag,
+  Receipt, CreditCard, Landmark, ArrowUpDown, Clock, Flag, StickyNote,
 } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import {
@@ -71,6 +71,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   const [splitRows, setSplitRows] = useState([]);
   const [remainderCategory, setRemainderCategory] = useState('Other');
   const [expandedSplits, setExpandedSplits] = useState({});
+  const [expandedNotes, setExpandedNotes] = useState({});
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [allocateTarget, setAllocateTarget] = useState(null);
   const [allocateRows, setAllocateRows] = useState([]);
@@ -109,13 +110,11 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   }
 
   function toggleFlag(id) {
-    updateTransactions(transactions.map((t) => (t.id === id
-      ? (t.flaggedForReview ? { ...t, flaggedForReview: false, flagNote: undefined } : { ...t, flaggedForReview: true })
-      : t)));
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, flaggedForReview: !t.flaggedForReview } : t)));
   }
 
-  function updateFlagNote(id, note) {
-    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, flagNote: note || undefined } : t)));
+  function updateNote(id, note) {
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, note: note || undefined } : t)));
   }
 
   const connectedAccountIds = useMemo(() => new Set((accounts || []).map((a) => a.id)), [accounts]);
@@ -925,28 +924,27 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           >
                             <Repeat size={11} /> {t.excludeFromTotals ? 'Transfer (excluded)' : 'Mark as transfer'}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => toggleFlag(t.id)}
-                            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold font-body"
-                            style={t.flaggedForReview
-                              ? { background: COLORS.gold, color: '#fff' }
-                              : { background: COLORS.bg, color: COLORS.inkSoft }}
-                            title={t.flaggedForReview ? 'Flagged for review — click to clear' : 'Flag for your partner to review'}
-                          >
-                            <Flag size={11} /> {t.flaggedForReview ? 'Flagged' : 'Flag'}
-                          </button>
                         </div>
-                        {t.flaggedForReview && (
+                        {expandedNotes[t.id] ? (
                           <input
-                            key={`flagnote-${t.id}`}
-                            defaultValue={t.flagNote || ''}
-                            placeholder="Note for your partner (optional)"
-                            onBlur={(e) => updateFlagNote(t.id, e.target.value.trim())}
+                            key={`note-${t.id}`}
+                            defaultValue={t.note || ''}
+                            placeholder="Note (optional)"
+                            autoFocus
+                            onBlur={(e) => { updateNote(t.id, e.target.value.trim()); setExpandedNotes((p) => ({ ...p, [t.id]: false })); }}
                             onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
                             className="font-body text-xs rounded-lg px-1.5 py-0.5 outline-none w-full mt-1"
                             style={{ color: COLORS.ink, border: `1.5px solid ${COLORS.border}`, background: '#fff' }}
                           />
+                        ) : t.note && (
+                          <p
+                            onClick={() => setExpandedNotes((p) => ({ ...p, [t.id]: true }))}
+                            className="font-body text-xs mt-1 cursor-pointer"
+                            style={{ color: COLORS.inkSoft }}
+                            title="Click to edit"
+                          >
+                            🗒 {t.note}
+                          </p>
                         )}
                         {t.savingsAllocations && t.savingsAllocations.length > 0 && (() => {
                           const applied = isAllocationApplied(t);
@@ -1019,6 +1017,12 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                       </td>
                       <td className="px-4 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-2.5">
+                          <button onClick={() => toggleFlag(t.id)} style={{ color: t.flaggedForReview ? COLORS.gold : COLORS.inkSoft }} className="hover:text-amber-600" title={t.flaggedForReview ? 'Flagged for review — click to clear' : 'Flag for your partner to review'}>
+                            <Flag size={15} />
+                          </button>
+                          <button onClick={() => setExpandedNotes((p) => ({ ...p, [t.id]: !p[t.id] }))} style={{ color: t.note ? COLORS.violet : COLORS.inkSoft }} className="hover:text-violet-600" title={t.note ? 'Edit note' : 'Add a note'}>
+                            <StickyNote size={15} />
+                          </button>
                           <button onClick={() => openAllocateModal(t)} style={{ color: t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : COLORS.inkSoft }} className="hover:text-teal-600" title="Choose bucket / allocate to savings">
                             <PiggyBank size={15} />
                           </button>

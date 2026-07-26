@@ -2,16 +2,16 @@ import React, { useState, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import {
   Wallet, Receipt, PiggyBank, Target, CalendarClock, TrendingUp, TrendingDown, Check,
-  Flame, Settings2, Coins, Landmark, CreditCard, ChevronDown, Repeat, Flag,
+  Flame, Settings2, Coins, Landmark, CreditCard, ChevronDown, Repeat, Flag, Plus, X,
 } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { CategoryColorContext, categoryColor } from '../lib/categoryColor';
-import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr, toggleMonthEntry, isTransferPlanDone } from '../lib/helpers';
-import { Card, MonthNav, EmptyState, CategoryBadge, JarBar } from '../components/ui';
+import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr, toggleMonthEntry, isTransferPlanDone, uid } from '../lib/helpers';
+import { Card, MonthNav, EmptyState, CategoryBadge, JarBar, TextInput, GhostButton } from '../components/ui';
 
 /* ---------------------------------- Dashboard ---------------------------------- */
 
-export function DashboardView({ transactions, updateTransactions, budgets, bills, updateBills, goals, month, setMonth, setTab, accounts, goToLedger, transferPlans, completeTransferPlan }) {
+export function DashboardView({ transactions, updateTransactions, budgets, bills, updateBills, goals, month, setMonth, setTab, accounts, goToLedger, transferPlans, completeTransferPlan, upcomingCharges, updateUpcomingCharges }) {
   const categoryColors = React.useContext(CategoryColorContext);
   const [hiddenChartCats, setHiddenChartCats] = useState([]);
   const [showChartFilter, setShowChartFilter] = useState(false);
@@ -82,7 +82,38 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
   );
 
   function unflagTransaction(id) {
-    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, flaggedForReview: false, flagNote: undefined } : t)));
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, flaggedForReview: false } : t)));
+  }
+
+  const needsAllocatingItems = useMemo(
+    () => transactions
+      .filter((t) => t.note && (!t.savingsAllocations || !t.savingsAllocations.length))
+      .sort((a, b) => b.date.localeCompare(a.date)),
+    [transactions]
+  );
+
+  function clearNote(id) {
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, note: undefined } : t)));
+  }
+
+  const [showAddCharge, setShowAddCharge] = useState(false);
+  const [chargeForm, setChargeForm] = useState({ description: '', amount: '', note: '' });
+
+  function addUpcomingCharge() {
+    if (!chargeForm.description.trim()) return;
+    updateUpcomingCharges([...upcomingCharges, {
+      id: uid(),
+      description: chargeForm.description.trim(),
+      amount: chargeForm.amount ? parseFloat(chargeForm.amount) || 0 : undefined,
+      note: chargeForm.note.trim() || undefined,
+      createdAt: Date.now(),
+    }]);
+    setChargeForm({ description: '', amount: '', note: '' });
+    setShowAddCharge(false);
+  }
+
+  function removeUpcomingCharge(id) {
+    updateUpcomingCharges(upcomingCharges.filter((c) => c.id !== id));
   }
 
   const checklistItems = [
@@ -326,7 +357,7 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
                 <div className="min-w-0">
                   <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
                   <p className="font-body text-xs truncate" style={{ color: COLORS.inkSoft }}>
-                    {t.date}{t.flagNote ? ` · ${t.flagNote}` : ''}
+                    {t.date}{t.note ? ` · ${t.note}` : ''}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -339,6 +370,97 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
                     style={{ background: COLORS.violetSoft, color: COLORS.violet }}
                   >
                     Resolved
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-display font-semibold flex items-center gap-1.5" style={{ color: COLORS.ink }}>
+            <PiggyBank size={16} /> Pending allocations
+          </h3>
+          <button onClick={() => goToLedger('All', 'All')} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>View in Ledger &rarr;</button>
+        </div>
+
+        {needsAllocatingItems.length > 0 && (
+          <div className="mb-4">
+            <p className="font-body text-xs font-semibold mb-2" style={{ color: COLORS.inkSoft }}>Needs allocating</p>
+            <div className="space-y-2">
+              {needsAllocatingItems.map((t) => (
+                <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                  <div className="min-w-0">
+                    <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                    <p className="font-body text-xs truncate" style={{ color: COLORS.inkSoft }}>{t.date} &middot; {t.note}</p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="font-display font-semibold text-sm" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                      {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                    </span>
+                    <button
+                      onClick={() => clearNote(t.id)}
+                      className="font-body text-xs font-semibold rounded-full px-2 py-1"
+                      style={{ background: COLORS.violetSoft, color: COLORS.violet }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between mb-2">
+          <p className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Not in the app yet</p>
+          <button onClick={() => setShowAddCharge((v) => !v)} className="font-body text-xs font-semibold inline-flex items-center gap-1" style={{ color: COLORS.violet }}>
+            <Plus size={12} /> Add a reminder
+          </button>
+        </div>
+
+        {showAddCharge && (
+          <div className="mb-3 grid sm:grid-cols-3 gap-2 items-end rounded-xl p-3" style={{ background: COLORS.bg }}>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Description</label>
+              <TextInput placeholder="e.g. Amazon order" value={chargeForm.description} onChange={(e) => setChargeForm({ ...chargeForm, description: e.target.value })} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Amount (optional)</label>
+              <TextInput type="number" min="0" step="0.01" placeholder="0.00" value={chargeForm.amount} onChange={(e) => setChargeForm({ ...chargeForm, amount: e.target.value })} />
+            </div>
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Note</label>
+              <TextInput placeholder="e.g. Allocate to MaKayla Fun" value={chargeForm.note} onChange={(e) => setChargeForm({ ...chargeForm, note: e.target.value })} />
+            </div>
+            <div className="sm:col-span-3">
+              <GhostButton onClick={addUpcomingCharge}><Check size={14} /> Save reminder</GhostButton>
+            </div>
+          </div>
+        )}
+
+        {upcomingCharges.length === 0 && needsAllocatingItems.length === 0 ? (
+          <EmptyState icon={PiggyBank} title="Nothing pending" subtitle="Leave a note on a transaction in the Ledger, or jot down a purchase that hasn't shown up here yet." />
+        ) : (
+          <div className="space-y-2">
+            {upcomingCharges.map((c) => (
+              <div key={c.id} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                <div className="min-w-0">
+                  <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{c.description}</p>
+                  {c.note && <p className="font-body text-xs truncate" style={{ color: COLORS.inkSoft }}>{c.note}</p>}
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {c.amount != null && (
+                    <span className="font-display font-semibold text-sm" style={{ color: COLORS.ink }}>{formatCurrency(c.amount)}</span>
+                  )}
+                  <button
+                    onClick={() => removeUpcomingCharge(c.id)}
+                    className="font-body text-xs font-semibold rounded-full px-2 py-1"
+                    style={{ background: COLORS.violetSoft, color: COLORS.violet }}
+                  >
+                    Done
                   </button>
                 </div>
               </div>

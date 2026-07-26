@@ -52,6 +52,7 @@ export default function App() {
   const [goals, setGoals] = useState([]);
   const [bills, setBills] = useState([]);
   const [transferPlans, setTransferPlans] = useState([]);
+  const [upcomingCharges, setUpcomingCharges] = useState([]);
   const [categoryColors, setCategoryColors] = useState({});
   const [hiddenCategories, setHiddenCategories] = useState([]);
   const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
@@ -102,6 +103,7 @@ export default function App() {
       setGoals(d?.goals || []);
       setBills(d?.bills || []);
       setTransferPlans(d?.transferPlans || []);
+      setUpcomingCharges(d?.upcomingCharges || []);
       setCategoryColors(d?.categoryColors || {});
       setHiddenCategories(d?.hiddenCategories || []);
       setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
@@ -271,6 +273,7 @@ export default function App() {
   function updateGoals(next) { setGoals(next); syncField('goals', next); }
   function updateBills(next) { setBills(next); syncField('bills', next); }
   function updateTransferPlans(next) { setTransferPlans(next); syncField('transferPlans', next); }
+  function updateUpcomingCharges(next) { setUpcomingCharges(next); syncField('upcomingCharges', next); }
 
   // Marks a recurring transfer plan as done for the real current month: creates
   // the actual ledger transaction (so the bucket's saved total and the Savings
@@ -485,7 +488,7 @@ export default function App() {
         ) : (
           <>
             {tab === 'dashboard' && (
-              <DashboardView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} bills={bills} updateBills={updateBills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} transferPlans={transferPlans} completeTransferPlan={completeTransferPlan} />
+              <DashboardView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} bills={bills} updateBills={updateBills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} transferPlans={transferPlans} completeTransferPlan={completeTransferPlan} upcomingCharges={upcomingCharges} updateUpcomingCharges={updateUpcomingCharges} />
             )}
             {tab === 'ledger' && (
               <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} catFilter={ledgerCatFilter} setCatFilter={setLedgerCatFilter} sourceFilter={ledgerSourceFilter} setSourceFilter={setLedgerSourceFilter} typeFilter={ledgerTypeFilter} setTypeFilter={setLedgerTypeFilter} lastSyncAt={lastSyncAt} bucketFilter={ledgerBucketFilter} setBucketFilter={setLedgerBucketFilter} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
