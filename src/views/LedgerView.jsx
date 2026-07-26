@@ -3,7 +3,7 @@ import Papa from 'papaparse';
 import {
   PiggyBank, Upload, Plus, Trash2, Search, ChevronRight, ChevronDown, ChevronUp,
   TrendingUp, TrendingDown, X, Check, Sparkles, Flame, Scissors, Settings2, Repeat,
-  Receipt, CreditCard, Landmark,
+  Receipt, CreditCard, Landmark, ArrowUpDown,
 } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import {
@@ -18,12 +18,38 @@ import { CategoryManager } from './SettingsView';
 
 /* ---------------------------------- Ledger ---------------------------------- */
 
+const SORT_FIELDS = [
+  { value: 'none', label: 'None' },
+  { value: 'date', label: 'Date' },
+  { value: 'description', label: 'Description' },
+  { value: 'amount', label: 'Amount' },
+  { value: 'category', label: 'Category' },
+  { value: 'type', label: 'Type' },
+];
+
+const DEFAULT_SORT_RULES = [
+  { field: 'date', dir: 'desc' },
+  { field: 'none', dir: 'asc' },
+  { field: 'none', dir: 'asc' },
+];
+
+function compareByField(a, b, field) {
+  if (field === 'amount') return a.amount - b.amount;
+  if (field === 'date') return a.date.localeCompare(b.date);
+  if (field === 'description') return a.description.localeCompare(b.description, undefined, { sensitivity: 'base' });
+  if (field === 'category') return a.category.localeCompare(b.category, undefined, { sensitivity: 'base' });
+  if (field === 'type') return a.type.localeCompare(b.type);
+  return 0;
+}
+
 export function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts, catFilter, setCatFilter, sourceFilter, setSourceFilter, typeFilter, setTypeFilter, lastSyncAt, bucketFilter, setBucketFilter, renameCategory, categoryColors, updateCategoryColors }) {
   const [search, setSearch] = useState('');
   const [amountMin, setAmountMin] = useState('');
   const [amountMax, setAmountMax] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [showSort, setShowSort] = useState(false);
+  const [sortRules, setSortRules] = useState(DEFAULT_SORT_RULES);
   const [showMoreFilters, setShowMoreFilters] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -157,12 +183,25 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
 
   const hasCustomDateRange = !!(dateFrom || dateTo);
 
+  function updateSortRule(index, patch) {
+    setSortRules((rules) => rules.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
+  function compareTransactions(a, b) {
+    for (const rule of sortRules) {
+      if (rule.field === 'none') continue;
+      const cmp = compareByField(a, b, rule.field);
+      if (cmp !== 0) return rule.dir === 'desc' ? -cmp : cmp;
+    }
+    return 0;
+  }
+
   const filtered = useMemo(() => {
     if (bucketFilter) {
       return transactions
         .filter((t) => t.savingsAllocations && t.savingsAllocations.some((a) => a.bucketId === bucketFilter))
         .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
-        .sort((a, b) => b.date.localeCompare(a.date));
+        .sort(compareTransactions);
     }
     return transactions
       .filter((t) => (hasCustomDateRange
@@ -174,8 +213,8 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
       .filter((t) => !amountMin || t.amount >= parseFloat(amountMin))
       .filter((t) => !amountMax || t.amount <= parseFloat(amountMax))
       .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
-      .sort((a, b) => b.date.localeCompare(a.date));
-  }, [transactions, month, catFilter, sourceFilter, typeFilter, bucketFilter, accountsById, search, dateFrom, dateTo, hasCustomDateRange, amountMin, amountMax]);
+      .sort(compareTransactions);
+  }, [transactions, month, catFilter, sourceFilter, typeFilter, bucketFilter, accountsById, search, dateFrom, dateTo, hasCustomDateRange, amountMin, amountMax, sortRules]);
 
   const filteredSummary = useMemo(() => {
     let countedIncome = 0, countedExpense = 0, excludedTotal = 0, excludedCount = 0;
@@ -579,6 +618,9 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
         <GhostButton onClick={() => setShowMoreFilters((v) => !v)}>
           {showMoreFilters ? <ChevronUp size={15} /> : <ChevronDown size={15} />} Amount &amp; date
         </GhostButton>
+        <GhostButton onClick={() => setShowSort((v) => !v)}>
+          <ArrowUpDown size={15} /> Sort
+        </GhostButton>
         <GhostButton onClick={() => setShowCategoryManager(true)}><Settings2 size={15} /> Categories</GhostButton>
         <GhostButton onClick={() => setShowImport(true)}><Upload size={15} /> Import CSV</GhostButton>
         {orphanedTransactions.length > 0 && (
@@ -623,6 +665,49 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
               Clear these filters
             </button>
           )}
+        </Card>
+      )}
+
+      {showSort && (
+        <Card>
+          <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+            Sort in levels &mdash; ties in the first level break using the second, then the third. Handy for spotting duplicates: try Description, then Date, then Amount.
+          </p>
+          <div className="space-y-2">
+            {sortRules.map((rule, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="font-body text-xs font-semibold flex-shrink-0" style={{ color: COLORS.inkSoft, width: 60 }}>
+                  {i === 0 ? 'Sort by' : 'Then by'}
+                </span>
+                <Select
+                  value={rule.field}
+                  onChange={(e) => updateSortRule(i, { field: e.target.value })}
+                  style={{ flex: 1, maxWidth: 220 }}
+                >
+                  {(i === 0 ? SORT_FIELDS.filter((f) => f.value !== 'none') : SORT_FIELDS).map((f) => (
+                    <option key={f.value} value={f.value}>{f.label}</option>
+                  ))}
+                </Select>
+                <button
+                  type="button"
+                  onClick={() => updateSortRule(i, { dir: rule.dir === 'asc' ? 'desc' : 'asc' })}
+                  disabled={rule.field === 'none'}
+                  className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-sm font-semibold font-body disabled:opacity-40"
+                  style={{ background: COLORS.violetSoft, color: COLORS.violet }}
+                >
+                  {rule.dir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  {rule.dir === 'asc' ? 'Ascending' : 'Descending'}
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={() => setSortRules(DEFAULT_SORT_RULES)}
+            className="font-body text-xs font-semibold mt-3"
+            style={{ color: COLORS.coral }}
+          >
+            Reset to default (newest first)
+          </button>
         </Card>
       )}
 
