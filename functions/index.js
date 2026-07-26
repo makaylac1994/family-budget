@@ -177,6 +177,8 @@ async function syncHouseholdInternal(householdId) {
           type: tx.amount > 0 ? 'expense' : 'income',
           source: 'plaid',
           excludeFromTotals: isTransferCategory(primary) ? true : undefined,
+          pending: tx.pending,
+          pendingTransactionId: tx.pending_transaction_id || undefined,
           addedAt: Date.now(),
         });
       });
@@ -194,6 +196,8 @@ async function syncHouseholdInternal(householdId) {
           type: tx.amount > 0 ? 'expense' : 'income',
           source: 'plaid',
           excludeFromTotals: isTransferCategory(primary) ? true : undefined,
+          pending: tx.pending,
+          pendingTransactionId: tx.pending_transaction_id || undefined,
         });
       });
       resp.data.removed.forEach((tx) => {
@@ -260,6 +264,29 @@ async function syncHouseholdInternal(householdId) {
         // Brand new transaction: use Plaid's auto-categorization/transfer guess as-is.
         byPlaidId.set(plaidId, val);
       }
+    }
+
+    // Plaid links a freshly-posted transaction back to the pending one it
+    // replaces via pending_transaction_id -- a direct signal, not a guess.
+    // Fold the two into one continuous ledger entry (carrying over any
+    // category/splits/etc. the user already set on the pending version)
+    // instead of leaving a "bank says this is gone" flag on the old one.
+    for (const tx of Array.from(byPlaidId.values())) {
+      if (!tx.pendingTransactionId) continue;
+      const pendingTx = byPlaidId.get(tx.pendingTransactionId);
+      if (!pendingTx) continue;
+      byPlaidId.delete(tx.pendingTransactionId);
+      byPlaidId.set(tx.plaidTransactionId, {
+        ...tx,
+        category: pendingTx.category,
+        splits: pendingTx.splits,
+        paymentSource: pendingTx.paymentSource,
+        excludeFromTotals: pendingTx.excludeFromTotals,
+        savingsAllocations: pendingTx.savingsAllocations,
+        savingsDirection: pendingTx.savingsDirection,
+        savingsTransferConfirmed: pendingTx.savingsTransferConfirmed,
+        addedAt: pendingTx.addedAt,
+      });
     }
 
     // Cross-connection duplicate guard: if a bank was disconnected and

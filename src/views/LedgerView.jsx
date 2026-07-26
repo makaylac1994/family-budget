@@ -3,7 +3,7 @@ import Papa from 'papaparse';
 import {
   PiggyBank, Upload, Plus, Trash2, Search, ChevronRight, ChevronDown, ChevronUp,
   TrendingUp, TrendingDown, X, Check, Sparkles, Flame, Scissors, Settings2, Repeat,
-  Receipt, CreditCard, Landmark, ArrowUpDown,
+  Receipt, CreditCard, Landmark, ArrowUpDown, Clock,
 } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import {
@@ -862,6 +862,15 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                             title="Review this in the Accounts tab"
                           >
                             <Flame size={9} /> Needs review
+                          </span>
+                        )}
+                        {t.pending && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs font-bold font-body ml-1.5"
+                            style={{ background: COLORS.border, color: COLORS.inkSoft }}
+                            title="Your bank hasn't fully posted this yet — amount or date may still change"
+                          >
+                            <Clock size={9} /> Pending
                           </span>
                         )}
                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
