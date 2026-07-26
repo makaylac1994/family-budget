@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Repeat, Plus, Check, Trash2 } from 'lucide-react';
 import { COLORS } from '../lib/constants';
-import { uid, currentMonthStr, formatCurrency } from '../lib/helpers';
+import { uid, formatCurrency, isTransferPlanDone } from '../lib/helpers';
 import { Card, PrimaryButton, TextInput, Select, EmptyState } from '../components/ui';
 
 /* ------------------------------ Recurring transfers ------------------------------ */
@@ -10,21 +10,11 @@ export function TransferPlanSection({ transferPlans, updateTransferPlans, goals,
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: '', amount: '', dueDay: '1', bucketId: goals[0]?.id || '' });
 
-  const currentMonth = currentMonthStr();
   const sortedGoals = [...goals].sort((a, b) => a.name.localeCompare(b.name));
 
   function bucketName(id) {
     const g = goals.find((x) => x.id === id);
     return g ? g.name : 'Deleted bucket';
-  }
-
-  // A plan only counts as "done this month" if the transaction it created is
-  // still around — if it was deleted by hand in the Ledger, this self-heals
-  // back to "not done" instead of staying stuck on a dead transaction id.
-  function completedTxId(plan) {
-    const txId = plan.completions?.[currentMonth];
-    if (!txId) return null;
-    return transactions.some((t) => t.id === txId) ? txId : null;
   }
 
   function addPlan() {
@@ -100,7 +90,7 @@ export function TransferPlanSection({ transferPlans, updateTransferPlans, goals,
           ) : (
             <div className="divide-y mt-3" style={{ borderColor: COLORS.border }}>
               {sorted.map((p) => {
-                const doneTxId = completedTxId(p);
+                const doneTxId = isTransferPlanDone(p, transactions);
                 return (
                   <div key={p.id} className="flex items-center justify-between py-3 gap-3">
                     <div className="flex items-center gap-3 flex-1 min-w-0">

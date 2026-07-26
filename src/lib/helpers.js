@@ -7,6 +7,22 @@ export function isCheckingAccount(account) {
   return (account.subtype || '').toLowerCase() === 'checking';
 }
 
+// Adds/removes 'YYYY-MM' from a paidMonths-style array — shared by Bills and
+// the Dashboard checklist so both toggle the exact same way.
+export function toggleMonthEntry(list, month) {
+  const arr = list || [];
+  return arr.includes(month) ? arr.filter((m) => m !== month) : [...arr, month];
+}
+
+// A transfer plan only counts as "done this month" if the transaction it
+// created is still around — if it was deleted by hand in the Ledger, this
+// self-heals back to "not done" instead of staying stuck on a dead id.
+export function isTransferPlanDone(plan, transactions) {
+  const txId = plan.completions?.[currentMonthStr()];
+  if (!txId) return null;
+  return (transactions || []).some((t) => t.id === txId) ? txId : null;
+}
+
 export function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }

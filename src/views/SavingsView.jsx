@@ -4,9 +4,8 @@ import { COLORS } from '../lib/constants';
 import { isSavingsAccount, monthlySavingsNeeded, formatCurrency } from '../lib/helpers';
 import { Card, PrimaryButton, TextInput, EmptyState } from '../components/ui';
 import { BucketCard, useBucketActions } from './SavingsAnnualShared';
-import { TransferPlanSection } from './TransferPlanSection';
 
-export function SavingsView({ goals, updateGoals, transactions, accounts, annualAccountId, goToLedgerBucket, transferPlans, updateTransferPlans, completeTransferPlan, undoTransferPlan }) {
+export function SavingsView({ goals, updateGoals, transactions, accounts, annualAccountId, goToLedgerBucket }) {
   const [collapsedAccounts, setCollapsedAccounts] = useState(() => new Set());
   const {
     showAdd, setShowAdd, name, setName, target, setTarget,
@@ -72,15 +71,6 @@ export function SavingsView({ goals, updateGoals, transactions, accounts, annual
         </div>
         <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New bucket</PrimaryButton>
       </div>
-
-      <TransferPlanSection
-        transferPlans={transferPlans}
-        updateTransferPlans={updateTransferPlans}
-        goals={goals}
-        transactions={transactions}
-        completeTransferPlan={completeTransferPlan}
-        undoTransferPlan={undoTransferPlan}
-      />
 
       {hasPending && (
         <Card style={{ borderColor: COLORS.gold, background: '#FFFBF0' }}>

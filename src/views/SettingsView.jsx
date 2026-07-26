@@ -5,6 +5,7 @@ import { categoryColor } from '../lib/categoryColor';
 import { isSavingsAccount, todayStr } from '../lib/helpers';
 import { Card, CategoryBadge, TextInput, CategoryColorPicker, Select, GhostButton } from '../components/ui';
 import { BillsView } from './BillsView';
+import { TransferPlanSection } from './TransferPlanSection';
 
 function NotesSection({ notes, updateNotes }) {
   const [text, setText] = useState(notes);
@@ -256,18 +257,26 @@ function DataBackupSection({ transactions, migrateLegacyTransactions }) {
   );
 }
 
-export function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory, categoryColors, updateCategoryColors, migrateLegacyTransactions }) {
+export function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory, categoryColors, updateCategoryColors, migrateLegacyTransactions, transferPlans, updateTransferPlans, completeTransferPlan, undoTransferPlan }) {
   return (
     <div className="space-y-5">
       <div>
         <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Settings</h2>
-        <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Notes, categories, and recurring bills, all in one place.</p>
+        <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Notes, categories, and recurring bills and transfers, all in one place.</p>
       </div>
 
       <NotesSection notes={notes} updateNotes={updateNotes} />
       <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
       <AnnualAccountSection accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} />
       <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />
+      <TransferPlanSection
+        transferPlans={transferPlans}
+        updateTransferPlans={updateTransferPlans}
+        goals={goals}
+        transactions={transactions}
+        completeTransferPlan={completeTransferPlan}
+        undoTransferPlan={undoTransferPlan}
+      />
       <DataBackupSection transactions={transactions} migrateLegacyTransactions={migrateLegacyTransactions} />
     </div>
   );

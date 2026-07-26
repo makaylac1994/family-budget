@@ -485,7 +485,7 @@ export default function App() {
         ) : (
           <>
             {tab === 'dashboard' && (
-              <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} transferPlans={transferPlans} />
+              <DashboardView transactions={transactions} budgets={budgets} bills={bills} updateBills={updateBills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} transferPlans={transferPlans} completeTransferPlan={completeTransferPlan} />
             )}
             {tab === 'ledger' && (
               <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} catFilter={ledgerCatFilter} setCatFilter={setLedgerCatFilter} sourceFilter={ledgerSourceFilter} setSourceFilter={setLedgerSourceFilter} typeFilter={ledgerTypeFilter} setTypeFilter={setLedgerTypeFilter} lastSyncAt={lastSyncAt} bucketFilter={ledgerBucketFilter} setBucketFilter={setLedgerBucketFilter} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
@@ -497,13 +497,13 @@ export default function App() {
               <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} />
             )}
             {tab === 'savings' && (
-              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} annualAccountId={annualAccountId} goToLedgerBucket={goToLedgerBucket} transferPlans={transferPlans} updateTransferPlans={updateTransferPlans} completeTransferPlan={completeTransferPlan} undoTransferPlan={undoTransferPlan} />
+              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} annualAccountId={annualAccountId} goToLedgerBucket={goToLedgerBucket} />
             )}
             {tab === 'annual' && (
               <AnnualView accounts={accounts} goals={goals} updateGoals={updateGoals} setTab={setTab} goToLedgerBucket={goToLedgerBucket} annualAccountId={annualAccountId} transactions={transactions} />
             )}
             {tab === 'settings' && (
-              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} migrateLegacyTransactions={migrateLegacyTransactions} />
+              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} migrateLegacyTransactions={migrateLegacyTransactions} transferPlans={transferPlans} updateTransferPlans={updateTransferPlans} completeTransferPlan={completeTransferPlan} undoTransferPlan={undoTransferPlan} />
             )}
           </>
         )}

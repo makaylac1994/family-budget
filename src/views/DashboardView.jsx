@@ -2,16 +2,16 @@ import React, { useState, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import {
   Wallet, Receipt, PiggyBank, Target, CalendarClock, TrendingUp, TrendingDown, Check,
-  Flame, Settings2, Coins, Landmark, CreditCard, ChevronDown,
+  Flame, Settings2, Coins, Landmark, CreditCard, ChevronDown, Repeat,
 } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { CategoryColorContext, categoryColor } from '../lib/categoryColor';
-import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr } from '../lib/helpers';
+import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr, toggleMonthEntry, isTransferPlanDone } from '../lib/helpers';
 import { Card, MonthNav, EmptyState, CategoryBadge, JarBar } from '../components/ui';
 
 /* ---------------------------------- Dashboard ---------------------------------- */
 
-export function DashboardView({ transactions, budgets, bills, goals, month, setMonth, setTab, accounts, goToLedger, transferPlans }) {
+export function DashboardView({ transactions, budgets, bills, updateBills, goals, month, setMonth, setTab, accounts, goToLedger, transferPlans, completeTransferPlan }) {
   const categoryColors = React.useContext(CategoryColorContext);
   const [hiddenChartCats, setHiddenChartCats] = useState([]);
   const [showChartFilter, setShowChartFilter] = useState(false);
@@ -56,25 +56,36 @@ export function DashboardView({ transactions, budgets, bills, goals, month, setM
     cat, limit, spent: byCategory[cat] || 0,
   })).sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1))).slice(0, 4);
 
-  const unpaidBills = bills
-    .filter((b) => !(b.paidMonths || []).includes(month))
+  // Both the cushion and the checklist below are scoped to the real current
+  // month (not whatever month is being browsed above via MonthNav) — the
+  // historical stats above stay tied to the browsed month, but "what's safe
+  // to spend" and "what do I need to do" are inherently about right now.
+  const currentMonth = currentMonthStr();
+  const unpaidBillsNow = bills
+    .filter((b) => !(b.paidMonths || []).includes(currentMonth))
     .sort((a, b) => a.dueDay - b.dueDay);
+  const unpaidBillsNowTotal = unpaidBillsNow.reduce((s, b) => s + (Number(b.amount) || 0), 0);
 
-  // "Safe to spend" cushion — always scoped to the real current month (not
-  // whatever month is being browsed above), since it's a right-now gut check:
-  // what's in checking, minus the card balance (assuming it's paid off in
-  // full), minus bills still owed from checking, minus savings transfers not
-  // yet made this month.
   const checkingTotal = (accounts || []).filter(isCheckingAccount).reduce((s, a) => s + (Number(a.balance) || 0), 0);
   const creditCardTotal = (accounts || []).filter((a) => a.type === 'credit').reduce((s, a) => s + (Number(a.balance) || 0), 0);
-  const currentMonth = currentMonthStr();
-  const unpaidBillsNowTotal = bills
-    .filter((b) => !(b.paidMonths || []).includes(currentMonth))
-    .reduce((s, b) => s + (Number(b.amount) || 0), 0);
-  const remainingTransfersTotal = (transferPlans || [])
-    .filter((p) => !p.completions?.[currentMonth])
-    .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const duePlans = (transferPlans || []).filter((p) => !isTransferPlanDone(p, transactions));
+  const remainingTransfersTotal = duePlans.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const cushion = checkingTotal - creditCardTotal - unpaidBillsNowTotal - remainingTransfersTotal;
+
+  function toggleBillPaid(id) {
+    updateBills(bills.map((b) => (b.id === id ? { ...b, paidMonths: toggleMonthEntry(b.paidMonths, currentMonth) } : b)));
+  }
+
+  const checklistItems = [
+    ...unpaidBillsNow.map((b) => ({
+      key: `bill-${b.id}`, kind: 'bill', name: b.name, amount: b.amount, dueDay: b.dueDay,
+      onToggle: () => toggleBillPaid(b.id),
+    })),
+    ...duePlans.map((p) => ({
+      key: `transfer-${p.id}`, kind: 'transfer', name: p.name, amount: p.amount, dueDay: p.dueDay,
+      onToggle: () => completeTransferPlan(p.id),
+    })),
+  ].sort((a, b) => a.dueDay - b.dueDay);
 
   return (
     <div className="space-y-5">
@@ -292,21 +303,32 @@ export function DashboardView({ transactions, budgets, bills, goals, month, setM
 
       <Card>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Upcoming bills</h3>
+          <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>This month's checklist</h3>
           <button onClick={() => setTab('settings')} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>Manage &rarr;</button>
         </div>
-        {unpaidBills.length === 0 ? (
-          <EmptyState icon={CalendarClock} title="All caught up" subtitle="No unpaid bills this month." />
+        {checklistItems.length === 0 ? (
+          <EmptyState icon={CalendarClock} title="All caught up" subtitle="No unpaid bills or pending transfers this month." />
         ) : (
           <div className="grid sm:grid-cols-2 gap-2">
-            {unpaidBills.slice(0, 6).map((b) => (
-              <div key={b.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
-                <div>
-                  <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{b.name}</p>
-                  <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Due day {b.dueDay}</p>
+            {checklistItems.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={item.onToggle}
+                className="flex items-center justify-between rounded-xl px-3 py-2 text-left"
+                style={{ background: COLORS.bg }}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="rounded-full p-1.5 flex-shrink-0" style={{ background: COLORS.violetSoft }}>
+                    {item.kind === 'bill' ? <Landmark size={13} style={{ color: COLORS.violet }} /> : <Repeat size={13} style={{ color: COLORS.violet }} />}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{item.name}</p>
+                    <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>Due day {item.dueDay}</p>
+                  </div>
                 </div>
-                <span className="font-display font-semibold text-sm" style={{ color: COLORS.ink }}>{formatCurrency(b.amount)}</span>
-              </div>
+                <span className="font-display font-semibold text-sm flex-shrink-0 ml-2" style={{ color: COLORS.ink }}>{formatCurrency(item.amount)}</span>
+              </button>
             ))}
           </div>
         )}

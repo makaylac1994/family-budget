@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { CalendarClock, Plus, Check, Trash2 } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
-import { uid, monthLabel } from '../lib/helpers';
+import { uid, monthLabel, toggleMonthEntry } from '../lib/helpers';
 import { Card, PrimaryButton, TextInput, Select, EmptyState, CategoryEditCell } from '../components/ui';
 
 /* ---------------------------------- Bills ---------------------------------- */
@@ -36,12 +36,7 @@ export function BillsView({ bills, updateBills, month, budgets, hiddenCategories
   }
 
   function togglePaid(id) {
-    updateBills(bills.map((b) => {
-      if (b.id !== id) return b;
-      const paid = b.paidMonths || [];
-      const isPaid = paid.includes(month);
-      return { ...b, paidMonths: isPaid ? paid.filter((m) => m !== month) : [...paid, month] };
-    }));
+    updateBills(bills.map((b) => (b.id === id ? { ...b, paidMonths: toggleMonthEntry(b.paidMonths, month) } : b)));
   }
 
   function updateBillField(id, field, value) {
