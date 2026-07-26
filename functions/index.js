@@ -269,6 +269,13 @@ async function syncHouseholdInternal(householdId) {
     // among Plaid-sourced transactions. Nothing is dropped — the likely
     // duplicate is flagged for review, keeping whichever copy is tied to a
     // currently-connected account as the presumed "real" one.
+    //
+    // Only fire when at least one entry in the match is on a now-disconnected
+    // account — that's the actual reconnect scenario this exists for. If
+    // every entry is on a currently-connected account, this is far more
+    // likely two genuinely separate transactions that happen to share a
+    // date/amount/description (e.g. two people on the same card buying the
+    // same thing on the same day) than a reconnect artifact, so leave them.
     const connectedAccountIds = new Set(allAccounts.map((a) => a.id));
     const bySignature = new Map();
     for (const tx of byPlaidId.values()) {
@@ -278,6 +285,8 @@ async function syncHouseholdInternal(householdId) {
     }
     for (const group of bySignature.values()) {
       if (group.length < 2) continue;
+      const hasDisconnectedEntry = group.some((tx) => !connectedAccountIds.has(tx.plaidAccountId));
+      if (!hasDisconnectedEntry) continue;
       const keeper = group.find((tx) => connectedAccountIds.has(tx.plaidAccountId)) || group[0];
       for (const tx of group) {
         if (tx === keeper || tx.pendingRemoval) continue;
@@ -289,6 +298,26 @@ async function syncHouseholdInternal(householdId) {
           duplicateOfId: keeper.id,
         });
       }
+    }
+
+    // For transactions the bank says are gone, try to find a plausible
+    // replacement on the same account — very often this is just a pending
+    // charge maturing into its posted version under a new Plaid id, not
+    // money actually vanishing. Purely a hint for the review screen; never
+    // auto-resolves anything.
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    for (const [plaidId, tx] of byPlaidId) {
+      if (tx.pendingRemovalReason !== 'removed_by_bank' || tx.likelyReplacementId) continue;
+      const removedDate = new Date(`${tx.date}T00:00:00`);
+      const candidate = Array.from(byPlaidId.values()).find((other) => (
+        other !== tx
+        && !other.pendingRemoval
+        && other.plaidAccountId === tx.plaidAccountId
+        && other.type === tx.type
+        && Math.abs(other.amount - tx.amount) < 0.01
+        && Math.abs(new Date(`${other.date}T00:00:00`) - removedDate) <= 5 * DAY_MS
+      ));
+      if (candidate) byPlaidId.set(plaidId, { ...tx, likelyReplacementId: candidate.id });
     }
 
     const nonPlaid = existing.filter((tx) => !tx.plaidTransactionId);

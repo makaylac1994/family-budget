@@ -105,7 +105,7 @@ export function AccountsView({ accounts, transactions, updateTransactions }) {
 
   function keepTransaction(id) {
     updateTransactions(transactions.map((t) => (
-      t.id === id ? { ...t, pendingRemoval: false, pendingRemovalReason: undefined, duplicateOfId: undefined } : t
+      t.id === id ? { ...t, pendingRemoval: false, pendingRemovalReason: undefined, duplicateOfId: undefined, likelyReplacementId: undefined } : t
     )));
   }
 
@@ -116,7 +116,7 @@ export function AccountsView({ accounts, transactions, updateTransactions }) {
   function keepAllPending() {
     const ids = new Set(pendingReview.map((t) => t.id));
     updateTransactions(transactions.map((t) => (
-      ids.has(t.id) ? { ...t, pendingRemoval: false, pendingRemovalReason: undefined, duplicateOfId: undefined } : t
+      ids.has(t.id) ? { ...t, pendingRemoval: false, pendingRemovalReason: undefined, duplicateOfId: undefined, likelyReplacementId: undefined } : t
     )));
   }
 
@@ -293,7 +293,10 @@ export function AccountsView({ accounts, transactions, updateTransactions }) {
             ) : (
               <>
                 <div className="space-y-2 mb-4 max-h-96 overflow-y-auto">
-                  {pendingReview.map((t) => (
+                  {pendingReview.map((t) => {
+                    const linkedId = t.pendingRemovalReason === 'duplicate' ? t.duplicateOfId : t.likelyReplacementId;
+                    const linked = linkedId ? transactions.find((x) => x.id === linkedId) : null;
+                    return (
                     <div key={t.id} className="rounded-xl px-3 py-2.5" style={{ background: COLORS.bg }}>
                       <div className="flex items-center justify-between gap-2 mb-1.5">
                         <div className="min-w-0">
@@ -306,6 +309,16 @@ export function AccountsView({ accounts, transactions, updateTransactions }) {
                           {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
                         </span>
                       </div>
+                      {linked ? (
+                        <p className="font-body text-xs mb-2 rounded-lg px-2 py-1.5" style={{ background: '#fff', color: COLORS.inkSoft }}>
+                          {t.pendingRemovalReason === 'duplicate' ? 'Kept instead: ' : 'May have already posted as: '}
+                          <span style={{ color: COLORS.ink, fontWeight: 600 }}>{linked.description}</span> on {linked.date} for {formatCurrency(linked.amount)}
+                        </p>
+                      ) : t.pendingRemovalReason === 'removed_by_bank' ? (
+                        <p className="font-body text-xs mb-2" style={{ color: COLORS.inkSoft }}>
+                          Often means a pending charge never fully posted. If nothing similar shows up elsewhere, it's usually safe to delete.
+                        </p>
+                      ) : null}
                       <div className="flex gap-2">
                         <button
                           onClick={() => keepTransaction(t.id)}
@@ -323,7 +336,8 @@ export function AccountsView({ accounts, transactions, updateTransactions }) {
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <div className="flex justify-between items-center">
                   <button onClick={deleteAllPending} className="font-body text-xs font-semibold" style={{ color: COLORS.coral }}>
