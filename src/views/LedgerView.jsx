@@ -25,7 +25,16 @@ const SORT_FIELDS = [
   { value: 'amount', label: 'Amount' },
   { value: 'category', label: 'Category' },
   { value: 'type', label: 'Type' },
+  { value: 'flag', label: 'Flag' },
 ];
+
+// Lower rank sorts first (ascending) -- most attention-worthy flags lead.
+function flagRank(t) {
+  if (t.pendingRemoval) return 0;
+  if (t.pending) return 1;
+  if (t.excludeFromTotals) return 2;
+  return 3;
+}
 
 const DEFAULT_SORT_RULES = [
   { field: 'date', dir: 'desc' },
@@ -39,6 +48,7 @@ function compareByField(a, b, field) {
   if (field === 'description') return a.description.localeCompare(b.description, undefined, { sensitivity: 'base' });
   if (field === 'category') return a.category.localeCompare(b.category, undefined, { sensitivity: 'base' });
   if (field === 'type') return a.type.localeCompare(b.type);
+  if (field === 'flag') return flagRank(a) - flagRank(b);
   return 0;
 }
 
