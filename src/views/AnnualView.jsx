@@ -2,12 +2,12 @@ import React, { useMemo } from 'react';
 import { CalendarClock, Plus, Check, Flame, Target } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { monthlySavingsNeeded, formatCurrency } from '../lib/helpers';
-import { Card, PrimaryButton, TextInput, EmptyState, GhostButton } from '../components/ui';
+import { Card, PrimaryButton, TextInput, EmptyState, GhostButton, JarBar } from '../components/ui';
 import { BucketCard, useBucketActions } from './SavingsAnnualShared';
 
 /* ---------------------------------- Annual ---------------------------------- */
 
-export function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBucket, annualAccountId }) {
+export function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBucket, annualAccountId, transactions }) {
   const {
     showAdd, setShowAdd, name, setName, target, setTarget,
     deposits, setDeposit,
@@ -22,6 +22,29 @@ export function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBuc
   const monthlyNeededTotal = bucketGoals.reduce((s, g) => s + monthlySavingsNeeded(g), 0);
   const perAccountReconcile = account ? [{ account, allocated, diff, linkedGoals: bucketGoals }] : [];
   const savingsAccountsList = account ? [account] : [];
+
+  // Only buckets with a target set have a defined yearly commitment to
+  // measure "spent" and "saved" against.
+  const targetedGoals = bucketGoals.filter((g) => g.target > 0);
+  const totalTarget = targetedGoals.reduce((s, g) => s + g.target, 0);
+  const totalSaved = targetedGoals.reduce((s, g) => s + (g.saved || 0), 0);
+
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - 365);
+  const cutoff = `${cutoffDate.getFullYear()}-${String(cutoffDate.getMonth() + 1).padStart(2, '0')}-${String(cutoffDate.getDate()).padStart(2, '0')}`;
+  const targetedBucketIds = new Set(targetedGoals.map((g) => g.id));
+  // Confirmed withdrawals only (savingsTransferConfirmed !== false), same rule
+  // LedgerView's isAllocationApplied/allocationDirection use elsewhere — just
+  // scoped to the trailing 365 days instead of "ever".
+  const spentTrailingYear = (transactions || []).reduce((sum, t) => {
+    if (!t.savingsAllocations?.length || t.savingsTransferConfirmed === false || t.date < cutoff) return sum;
+    const dir = t.savingsDirection || (t.type === 'income' ? 'withdraw' : 'deposit');
+    if (dir !== 'withdraw') return sum;
+    return sum + t.savingsAllocations.filter((a) => targetedBucketIds.has(a.bucketId)).reduce((s, a) => s + a.amount, 0);
+  }, 0);
+
+  const spentPct = totalTarget > 0 ? (spentTrailingYear / totalTarget) * 100 : 0;
+  const savedPct = totalTarget > 0 ? (totalSaved / totalTarget) * 100 : 0;
 
   if (!annualAccountId) {
     return (
@@ -104,6 +127,30 @@ export function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBuc
           </span>
         )}
       </div>
+
+      {totalTarget > 0 && (
+        <Card>
+          <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+            Against this year's total budget of {formatCurrency(totalTarget)} across your targeted buckets.
+          </p>
+          <div className="space-y-4">
+            <div>
+              <div className="flex justify-between text-sm font-body mb-1">
+                <span style={{ color: COLORS.ink }}>Spent (trailing 12 months)</span>
+                <span style={{ color: COLORS.inkSoft }}>{formatCurrency(spentTrailingYear)} of {formatCurrency(totalTarget)}</span>
+              </div>
+              <JarBar pct={spentPct} />
+            </div>
+            <div>
+              <div className="flex justify-between text-sm font-body mb-1">
+                <span style={{ color: COLORS.ink }}>Currently saved</span>
+                <span style={{ color: COLORS.inkSoft }}>{formatCurrency(totalSaved)} of {formatCurrency(totalTarget)}</span>
+              </div>
+              <JarBar pct={savedPct} />
+            </div>
+          </div>
+        </Card>
+      )}
 
       {showAdd && (
         <Card>
