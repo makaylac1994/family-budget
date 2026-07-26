@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import {
   Wallet, Receipt, PiggyBank, Target, CalendarClock, TrendingUp, TrendingDown, Check,
-  Flame, Settings2, Coins, Landmark, CreditCard, ChevronDown, Repeat,
+  Flame, Settings2, Coins, Landmark, CreditCard, ChevronDown, Repeat, Flag,
 } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { CategoryColorContext, categoryColor } from '../lib/categoryColor';
@@ -11,7 +11,7 @@ import { Card, MonthNav, EmptyState, CategoryBadge, JarBar } from '../components
 
 /* ---------------------------------- Dashboard ---------------------------------- */
 
-export function DashboardView({ transactions, budgets, bills, updateBills, goals, month, setMonth, setTab, accounts, goToLedger, transferPlans, completeTransferPlan }) {
+export function DashboardView({ transactions, updateTransactions, budgets, bills, updateBills, goals, month, setMonth, setTab, accounts, goToLedger, transferPlans, completeTransferPlan }) {
   const categoryColors = React.useContext(CategoryColorContext);
   const [hiddenChartCats, setHiddenChartCats] = useState([]);
   const [showChartFilter, setShowChartFilter] = useState(false);
@@ -74,6 +74,15 @@ export function DashboardView({ transactions, budgets, bills, updateBills, goals
 
   function toggleBillPaid(id) {
     updateBills(bills.map((b) => (b.id === id ? { ...b, paidMonths: toggleMonthEntry(b.paidMonths, currentMonth) } : b)));
+  }
+
+  const flaggedItems = useMemo(
+    () => transactions.filter((t) => t.flaggedForReview).sort((a, b) => b.date.localeCompare(a.date)),
+    [transactions]
+  );
+
+  function unflagTransaction(id) {
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, flaggedForReview: false, flagNote: undefined } : t)));
   }
 
   const checklistItems = [
@@ -297,6 +306,43 @@ export function DashboardView({ transactions, budgets, bills, updateBills, goals
                 <Bar dataKey="target" name="Target" fill={COLORS.violetSoft} stroke={COLORS.violet} strokeWidth={1} radius={[6, 6, 0, 0]} maxBarSize={40} />
               </BarChart>
             </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-display font-semibold flex items-center gap-1.5" style={{ color: COLORS.ink }}>
+            <Flag size={16} /> Flagged for review
+          </h3>
+          <button onClick={() => goToLedger('All', 'All')} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>View in Ledger &rarr;</button>
+        </div>
+        {flaggedItems.length === 0 ? (
+          <EmptyState icon={Flag} title="Nothing flagged" subtitle="Flag a transaction in the Ledger to bring it here for your partner to check." />
+        ) : (
+          <div className="space-y-2">
+            {flaggedItems.map((t) => (
+              <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                <div className="min-w-0">
+                  <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                  <p className="font-body text-xs truncate" style={{ color: COLORS.inkSoft }}>
+                    {t.date}{t.flagNote ? ` · ${t.flagNote}` : ''}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className="font-display font-semibold text-sm" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+                    {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
+                  </span>
+                  <button
+                    onClick={() => unflagTransaction(t.id)}
+                    className="font-body text-xs font-semibold rounded-full px-2 py-1"
+                    style={{ background: COLORS.violetSoft, color: COLORS.violet }}
+                  >
+                    Resolved
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </Card>

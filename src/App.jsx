@@ -485,7 +485,7 @@ export default function App() {
         ) : (
           <>
             {tab === 'dashboard' && (
-              <DashboardView transactions={transactions} budgets={budgets} bills={bills} updateBills={updateBills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} transferPlans={transferPlans} completeTransferPlan={completeTransferPlan} />
+              <DashboardView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} bills={bills} updateBills={updateBills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} transferPlans={transferPlans} completeTransferPlan={completeTransferPlan} />
             )}
             {tab === 'ledger' && (
               <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} catFilter={ledgerCatFilter} setCatFilter={setLedgerCatFilter} sourceFilter={ledgerSourceFilter} setSourceFilter={setLedgerSourceFilter} typeFilter={ledgerTypeFilter} setTypeFilter={setLedgerTypeFilter} lastSyncAt={lastSyncAt} bucketFilter={ledgerBucketFilter} setBucketFilter={setLedgerBucketFilter} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />

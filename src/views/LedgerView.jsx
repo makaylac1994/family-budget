@@ -3,7 +3,7 @@ import Papa from 'papaparse';
 import {
   PiggyBank, Upload, Plus, Trash2, Search, ChevronRight, ChevronDown, ChevronUp,
   TrendingUp, TrendingDown, X, Check, Sparkles, Flame, Scissors, Settings2, Repeat,
-  Receipt, CreditCard, Landmark, ArrowUpDown, Clock,
+  Receipt, CreditCard, Landmark, ArrowUpDown, Clock, Flag,
 } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import {
@@ -29,11 +29,14 @@ const SORT_FIELDS = [
 ];
 
 // Lower rank sorts first (ascending) -- most attention-worthy flags lead.
+// A manual flag outranks the automatic bank-sync ones: it's a deliberate
+// ask from one partner to the other, not just a data-integrity heads-up.
 function flagRank(t) {
-  if (t.pendingRemoval) return 0;
-  if (t.pending) return 1;
-  if (t.excludeFromTotals) return 2;
-  return 3;
+  if (t.flaggedForReview) return 0;
+  if (t.pendingRemoval) return 1;
+  if (t.pending) return 2;
+  if (t.excludeFromTotals) return 3;
+  return 4;
 }
 
 const DEFAULT_SORT_RULES = [
@@ -103,6 +106,16 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
 
   function toggleExcluded(id) {
     updateTransactions(transactions.map((t) => (t.id === id ? { ...t, excludeFromTotals: !t.excludeFromTotals } : t)));
+  }
+
+  function toggleFlag(id) {
+    updateTransactions(transactions.map((t) => (t.id === id
+      ? (t.flaggedForReview ? { ...t, flaggedForReview: false, flagNote: undefined } : { ...t, flaggedForReview: true })
+      : t)));
+  }
+
+  function updateFlagNote(id, note) {
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, flagNote: note || undefined } : t)));
   }
 
   const connectedAccountIds = useMemo(() => new Set((accounts || []).map((a) => a.id)), [accounts]);
@@ -912,7 +925,29 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           >
                             <Repeat size={11} /> {t.excludeFromTotals ? 'Transfer (excluded)' : 'Mark as transfer'}
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleFlag(t.id)}
+                            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold font-body"
+                            style={t.flaggedForReview
+                              ? { background: COLORS.gold, color: '#fff' }
+                              : { background: COLORS.bg, color: COLORS.inkSoft }}
+                            title={t.flaggedForReview ? 'Flagged for review — click to clear' : 'Flag for your partner to review'}
+                          >
+                            <Flag size={11} /> {t.flaggedForReview ? 'Flagged' : 'Flag'}
+                          </button>
                         </div>
+                        {t.flaggedForReview && (
+                          <input
+                            key={`flagnote-${t.id}`}
+                            defaultValue={t.flagNote || ''}
+                            placeholder="Note for your partner (optional)"
+                            onBlur={(e) => updateFlagNote(t.id, e.target.value.trim())}
+                            onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                            className="font-body text-xs rounded-lg px-1.5 py-0.5 outline-none w-full mt-1"
+                            style={{ color: COLORS.ink, border: `1.5px solid ${COLORS.border}`, background: '#fff' }}
+                          />
+                        )}
                         {t.savingsAllocations && t.savingsAllocations.length > 0 && (() => {
                           const applied = isAllocationApplied(t);
                           const dir = allocationDirection(t);
