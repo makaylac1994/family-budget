@@ -3,6 +3,10 @@ export function isSavingsAccount(account) {
   return SAVINGS_SUBTYPES.includes((account.subtype || '').toLowerCase());
 }
 
+export function isCheckingAccount(account) {
+  return (account.subtype || '').toLowerCase() === 'checking';
+}
+
 export function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }

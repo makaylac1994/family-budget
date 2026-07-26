@@ -5,7 +5,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { Wallet, Receipt, PiggyBank, CalendarClock, Coins, Settings2, Landmark, Loader2 } from 'lucide-react';
 import { COLORS } from './lib/constants';
 import { CategoryColorContext } from './lib/categoryColor';
-import { generateInviteCode, currentMonthStr, groupTransactionsByMonth } from './lib/helpers';
+import { generateInviteCode, currentMonthStr, groupTransactionsByMonth, uid, todayStr } from './lib/helpers';
 import { AuthGate } from './auth/AuthGate';
 import { HouseholdSetup } from './auth/HouseholdSetup';
 import { DashboardView } from './views/DashboardView';
@@ -51,6 +51,7 @@ export default function App() {
   const [budgets, setBudgets] = useState({});
   const [goals, setGoals] = useState([]);
   const [bills, setBills] = useState([]);
+  const [transferPlans, setTransferPlans] = useState([]);
   const [categoryColors, setCategoryColors] = useState({});
   const [hiddenCategories, setHiddenCategories] = useState([]);
   const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
@@ -100,6 +101,7 @@ export default function App() {
       setBudgets(d?.budgets || {});
       setGoals(d?.goals || []);
       setBills(d?.bills || []);
+      setTransferPlans(d?.transferPlans || []);
       setCategoryColors(d?.categoryColors || {});
       setHiddenCategories(d?.hiddenCategories || []);
       setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
@@ -151,7 +153,7 @@ export default function App() {
     await setDoc(householdRef, {
       members: [user.uid],
       inviteCode: code,
-      budgets: {}, goals: [], bills: [],
+      budgets: {}, goals: [], bills: [], transferPlans: [],
       categoryColors: {}, hiddenCategories: [], categoryMemory: { exact: {}, merchant: {} },
     });
     await setDoc(doc(db, 'invites', code), { householdId: householdRef.id });
@@ -268,6 +270,65 @@ export default function App() {
   function updateBudgets(next) { setBudgets(next); syncField('budgets', next); }
   function updateGoals(next) { setGoals(next); syncField('goals', next); }
   function updateBills(next) { setBills(next); syncField('bills', next); }
+  function updateTransferPlans(next) { setTransferPlans(next); syncField('transferPlans', next); }
+
+  // Marks a recurring transfer plan as done for the real current month: creates
+  // the actual ledger transaction (so the bucket's saved total and the Savings
+  // tab's real-balance reconciliation stay correct) and records which
+  // transaction it created, so undoTransferPlan can find and reverse it.
+  function completeTransferPlan(planId) {
+    const plan = transferPlans.find((p) => p.id === planId);
+    if (!plan) return;
+    const bucket = goals.find((g) => g.id === plan.bucketId);
+    if (!bucket) {
+      window.alert("That bucket no longer exists — pick a different one for this transfer.");
+      return;
+    }
+    const currentMonth = currentMonthStr();
+    if (plan.completions?.[currentMonth]) return;
+
+    const txId = uid();
+    updateTransactions([{
+      id: txId,
+      date: todayStr(),
+      description: plan.name,
+      category: bucket.name,
+      amount: plan.amount,
+      type: 'expense',
+      paymentSource: 'bank',
+      excludeFromTotals: true,
+      savingsAllocations: [{ id: uid(), bucketId: plan.bucketId, amount: plan.amount }],
+      savingsDirection: 'deposit',
+      savingsTransferConfirmed: true,
+    }, ...transactions]);
+
+    updateGoals(goals.map((g) => (g.id === plan.bucketId ? { ...g, saved: (g.saved || 0) + plan.amount } : g)));
+
+    updateTransferPlans(transferPlans.map((p) => (
+      p.id === planId ? { ...p, completions: { ...(p.completions || {}), [currentMonth]: txId } } : p
+    )));
+  }
+
+  function undoTransferPlan(planId) {
+    const plan = transferPlans.find((p) => p.id === planId);
+    if (!plan) return;
+    const currentMonth = currentMonthStr();
+    const txId = plan.completions?.[currentMonth];
+    if (!txId) return;
+    if (!window.confirm("Undo this transfer? This deletes the transaction it created and reverses the bucket deposit.")) return;
+
+    const tx = transactions.find((t) => t.id === txId);
+    if (tx?.savingsAllocations?.length) {
+      updateGoals(goals.map((g) => (
+        g.id === plan.bucketId ? { ...g, saved: Math.max(0, (g.saved || 0) - tx.savingsAllocations[0].amount) } : g
+      )));
+    }
+    updateTransactions(transactions.filter((t) => t.id !== txId));
+
+    const nextCompletions = { ...(plan.completions || {}) };
+    delete nextCompletions[currentMonth];
+    updateTransferPlans(transferPlans.map((p) => (p.id === planId ? { ...p, completions: nextCompletions } : p)));
+  }
   function updateCategoryColors(next) { setCategoryColors(next); syncField('categoryColors', next); }
   function updateHiddenCategories(next) { setHiddenCategories(next); syncField('hiddenCategories', next); }
   function updateCategoryMemory(next) { setCategoryMemory(next); syncField('categoryMemory', next); }
@@ -424,7 +485,7 @@ export default function App() {
         ) : (
           <>
             {tab === 'dashboard' && (
-              <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} />
+              <DashboardView transactions={transactions} budgets={budgets} bills={bills} goals={goals} month={month} setMonth={setMonth} setTab={setTab} accounts={accounts} goToLedger={goToLedger} transferPlans={transferPlans} />
             )}
             {tab === 'ledger' && (
               <LedgerView transactions={transactions} updateTransactions={updateTransactions} budgets={budgets} month={month} setMonth={setMonth} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} categoryMemory={categoryMemory} updateCategoryMemory={updateCategoryMemory} goals={goals} updateGoals={updateGoals} accounts={accounts} catFilter={ledgerCatFilter} setCatFilter={setLedgerCatFilter} sourceFilter={ledgerSourceFilter} setSourceFilter={setLedgerSourceFilter} typeFilter={ledgerTypeFilter} setTypeFilter={setLedgerTypeFilter} lastSyncAt={lastSyncAt} bucketFilter={ledgerBucketFilter} setBucketFilter={setLedgerBucketFilter} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
@@ -436,7 +497,7 @@ export default function App() {
               <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} />
             )}
             {tab === 'savings' && (
-              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} annualAccountId={annualAccountId} goToLedgerBucket={goToLedgerBucket} />
+              <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} annualAccountId={annualAccountId} goToLedgerBucket={goToLedgerBucket} transferPlans={transferPlans} updateTransferPlans={updateTransferPlans} completeTransferPlan={completeTransferPlan} undoTransferPlan={undoTransferPlan} />
             )}
             {tab === 'annual' && (
               <AnnualView accounts={accounts} goals={goals} updateGoals={updateGoals} setTab={setTab} goToLedgerBucket={goToLedgerBucket} annualAccountId={annualAccountId} />

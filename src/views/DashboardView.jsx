@@ -6,12 +6,12 @@ import {
 } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { CategoryColorContext, categoryColor } from '../lib/categoryColor';
-import { isSavingsAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor } from '../lib/helpers';
+import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr } from '../lib/helpers';
 import { Card, MonthNav, EmptyState, CategoryBadge, JarBar } from '../components/ui';
 
 /* ---------------------------------- Dashboard ---------------------------------- */
 
-export function DashboardView({ transactions, budgets, bills, goals, month, setMonth, setTab, accounts, goToLedger }) {
+export function DashboardView({ transactions, budgets, bills, goals, month, setMonth, setTab, accounts, goToLedger, transferPlans }) {
   const categoryColors = React.useContext(CategoryColorContext);
   const [hiddenChartCats, setHiddenChartCats] = useState([]);
   const [showChartFilter, setShowChartFilter] = useState(false);
@@ -60,6 +60,22 @@ export function DashboardView({ transactions, budgets, bills, goals, month, setM
     .filter((b) => !(b.paidMonths || []).includes(month))
     .sort((a, b) => a.dueDay - b.dueDay);
 
+  // "Safe to spend" cushion — always scoped to the real current month (not
+  // whatever month is being browsed above), since it's a right-now gut check:
+  // what's in checking, minus the card balance (assuming it's paid off in
+  // full), minus bills still owed from checking, minus savings transfers not
+  // yet made this month.
+  const checkingTotal = (accounts || []).filter(isCheckingAccount).reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const creditCardTotal = (accounts || []).filter((a) => a.type === 'credit').reduce((s, a) => s + (Number(a.balance) || 0), 0);
+  const currentMonth = currentMonthStr();
+  const unpaidBillsNowTotal = bills
+    .filter((b) => !(b.paidMonths || []).includes(currentMonth))
+    .reduce((s, b) => s + (Number(b.amount) || 0), 0);
+  const remainingTransfersTotal = (transferPlans || [])
+    .filter((p) => !p.completions?.[currentMonth])
+    .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const cushion = checkingTotal - creditCardTotal - unpaidBillsNowTotal - remainingTransfersTotal;
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -69,6 +85,18 @@ export function DashboardView({ transactions, budgets, bills, goals, month, setM
         </div>
         <MonthNav month={month} setMonth={setMonth} />
       </div>
+
+      {accounts.length > 0 && (
+        <Card style={cushion < 0 ? { borderColor: COLORS.coral, background: '#FFF5F5' } : {}}>
+          <div className="flex items-center gap-2 mb-1" style={{ color: cushion >= 0 ? COLORS.teal : COLORS.coral }}>
+            <Wallet size={16} /><span className="font-body text-xs font-semibold uppercase tracking-wide">Safe to spend</span>
+          </div>
+          <p className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>{formatCurrency(cushion)}</p>
+          <p className="font-body text-xs mt-1" style={{ color: COLORS.inkSoft }}>
+            {formatCurrency(checkingTotal)} checking &minus; {formatCurrency(creditCardTotal)} card &minus; {formatCurrency(unpaidBillsNowTotal)} unpaid bills &minus; {formatCurrency(remainingTransfersTotal)} planned transfers
+          </p>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <Card onClick={() => goToLedger('income', 'All')}>
