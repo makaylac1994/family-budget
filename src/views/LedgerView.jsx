@@ -28,10 +28,19 @@ const SORT_FIELDS = [
   { value: 'flag', label: 'Flag' },
 ];
 
+const FLAG_TYPES = [
+  { value: 'any', label: 'Any (default priority)' },
+  { value: 'flaggedForReview', label: 'Flagged for partner' },
+  { value: 'pendingRemoval', label: 'Needs review (bank)' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'excludeFromTotals', label: 'Excluded (transfer)' },
+];
+
 // Lower rank sorts first (ascending) -- most attention-worthy flags lead.
 // A manual flag outranks the automatic bank-sync ones: it's a deliberate
 // ask from one partner to the other, not just a data-integrity heads-up.
-function flagRank(t) {
+function flagRank(t, flagType) {
+  if (flagType && flagType !== 'any') return t[flagType] ? 0 : 1;
   if (t.flaggedForReview) return 0;
   if (t.pendingRemoval) return 1;
   if (t.pending) return 2;
@@ -40,18 +49,18 @@ function flagRank(t) {
 }
 
 const DEFAULT_SORT_RULES = [
-  { field: 'date', dir: 'desc' },
-  { field: 'none', dir: 'asc' },
-  { field: 'none', dir: 'asc' },
+  { field: 'date', dir: 'desc', flagType: 'any' },
+  { field: 'none', dir: 'asc', flagType: 'any' },
+  { field: 'none', dir: 'asc', flagType: 'any' },
 ];
 
-function compareByField(a, b, field) {
+function compareByField(a, b, field, flagType) {
   if (field === 'amount') return a.amount - b.amount;
   if (field === 'date') return a.date.localeCompare(b.date);
   if (field === 'description') return a.description.localeCompare(b.description, undefined, { sensitivity: 'base' });
   if (field === 'category') return a.category.localeCompare(b.category, undefined, { sensitivity: 'base' });
   if (field === 'type') return a.type.localeCompare(b.type);
-  if (field === 'flag') return flagRank(a) - flagRank(b);
+  if (field === 'flag') return flagRank(a, flagType) - flagRank(b, flagType);
   return 0;
 }
 
@@ -214,7 +223,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   function compareTransactions(a, b) {
     for (const rule of sortRules) {
       if (rule.field === 'none') continue;
-      const cmp = compareByField(a, b, rule.field);
+      const cmp = compareByField(a, b, rule.field, rule.flagType);
       if (cmp !== 0) return rule.dir === 'desc' ? -cmp : cmp;
     }
     return 0;
@@ -712,6 +721,17 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                     <option key={f.value} value={f.value}>{f.label}</option>
                   ))}
                 </Select>
+                {rule.field === 'flag' && (
+                  <Select
+                    value={rule.flagType || 'any'}
+                    onChange={(e) => updateSortRule(i, { flagType: e.target.value })}
+                    style={{ flex: 1, maxWidth: 200 }}
+                  >
+                    {FLAG_TYPES.map((f) => (
+                      <option key={f.value} value={f.value}>{f.label}</option>
+                    ))}
+                  </Select>
+                )}
                 <button
                   type="button"
                   onClick={() => updateSortRule(i, { dir: rule.dir === 'asc' ? 'desc' : 'asc' })}

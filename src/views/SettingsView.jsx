@@ -1,17 +1,17 @@
 import React, { useState, useMemo } from 'react';
-import { Check, X, Palette, Settings2, Trash2, Download, RefreshCw, Loader2 } from 'lucide-react';
+import { Check, X, Palette, Settings2, Trash2, Download, RefreshCw, Loader2, Plus } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import { categoryColor } from '../lib/categoryColor';
-import { isSavingsAccount, todayStr } from '../lib/helpers';
-import { Card, CategoryBadge, TextInput, CategoryColorPicker, Select, GhostButton } from '../components/ui';
+import { isSavingsAccount, todayStr, uid } from '../lib/helpers';
+import { Card, CategoryBadge, TextInput, CategoryColorPicker, Select, GhostButton, PrimaryButton, EmptyState } from '../components/ui';
 import { BillsView } from './BillsView';
 import { TransferPlanSection } from './TransferPlanSection';
 
-function NotesSection({ notes, updateNotes }) {
-  const [text, setText] = useState(notes);
+function NoteRow({ note, onSave, onDelete }) {
+  const [text, setText] = useState(note.text);
   const [saved, setSaved] = useState(true);
 
-  React.useEffect(() => { setText(notes); }, [notes]);
+  React.useEffect(() => { setText(note.text); }, [note.text]);
 
   function handleChange(e) {
     setText(e.target.value);
@@ -19,29 +19,85 @@ function NotesSection({ notes, updateNotes }) {
   }
 
   function handleBlur() {
-    if (text !== notes) updateNotes(text);
+    if (text !== note.text) onSave(text);
     setSaved(true);
   }
+
+  return (
+    <div className="rounded-xl p-3" style={{ background: COLORS.bg }}>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{saved ? 'Saved' : 'Saving...'}</span>
+        <button onClick={onDelete} title="Delete note" style={{ color: COLORS.inkSoft }} className="hover:text-red-500">
+          <Trash2 size={14} />
+        </button>
+      </div>
+      <textarea
+        value={text}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        rows={4}
+        className="w-full rounded-xl px-3 py-2 text-sm font-body outline-none resize-y"
+        style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink, background: '#fff' }}
+        onFocus={(e) => { e.target.style.borderColor = COLORS.violet; }}
+      />
+    </div>
+  );
+}
+
+function NotesSection({ notes, updateNotes }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [newText, setNewText] = useState('');
+
+  function addNote() {
+    if (!newText.trim()) return;
+    updateNotes([...notes, { id: uid(), text: newText.trim(), createdAt: Date.now() }]);
+    setNewText('');
+    setShowAdd(false);
+  }
+
+  function updateNoteText(id, text) {
+    updateNotes(notes.map((n) => (n.id === id ? { ...n, text } : n)));
+  }
+
+  function removeNote(id) {
+    updateNotes(notes.filter((n) => n.id !== id));
+  }
+
+  const sorted = [...notes].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
   return (
     <Card>
       <div className="flex items-center justify-between mb-2">
         <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Notes</h3>
-        <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{saved ? 'Saved' : 'Saving...'}</span>
+        <GhostButton onClick={() => setShowAdd((v) => !v)}><Plus size={14} /> Add note</GhostButton>
       </div>
       <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
         Shared with everyone in this household &mdash; a good place to write down category definitions, rules of thumb, or anything you want to stay on the same page about.
       </p>
-      <textarea
-        value={text}
-        onChange={handleChange}
-        onBlur={handleBlur}
-        rows={8}
-        placeholder={`e.g.\nGroceries = food + household supplies\nShopping = anything from Amazon that isn't a gift\nDining Out = restaurants, coffee, takeout`}
-        className="w-full rounded-xl px-3 py-2 text-sm font-body outline-none resize-y"
-        style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink }}
-        onFocus={(e) => { e.target.style.borderColor = COLORS.violet; }}
-      />
+      {showAdd && (
+        <div className="mb-3 rounded-xl p-3" style={{ background: COLORS.violetSoft }}>
+          <textarea
+            value={newText}
+            onChange={(e) => setNewText(e.target.value)}
+            rows={4}
+            autoFocus
+            placeholder={`e.g.\nGroceries = food + household supplies\nShopping = anything from Amazon that isn't a gift\nDining Out = restaurants, coffee, takeout`}
+            className="w-full rounded-xl px-3 py-2 text-sm font-body outline-none resize-y mb-2"
+            style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink, background: '#fff' }}
+            onFocus={(e) => { e.target.style.borderColor = COLORS.violet; }}
+          />
+          <PrimaryButton onClick={addNote}><Check size={15} /> Save note</PrimaryButton>
+        </div>
+      )}
+      {sorted.length === 0 ? (
+        <EmptyState icon={Settings2} title="No notes yet" subtitle="Add one to write down category definitions or anything else worth remembering." />
+      ) : (
+        <div className="space-y-3">
+          {sorted.map((n) => (
+            <NoteRow key={n.id} note={n} onSave={(text) => updateNoteText(n.id, text)} onDelete={() => removeNote(n.id)} />
+          ))}
+        </div>
+      )}
     </Card>
   );
 }

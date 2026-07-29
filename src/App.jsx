@@ -58,7 +58,7 @@ export default function App() {
   const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
   const [accounts, setAccounts] = useState([]);
   const [lastSyncAt, setLastSyncAt] = useState(null);
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState([]);
   const [annualAccountId, setAnnualAccountId] = useState(null);
 
   // Track sign-in state.
@@ -109,7 +109,9 @@ export default function App() {
       setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
       setAccounts(d?.accounts || []);
       setLastSyncAt(d?.lastSyncAt || null);
-      setNotes(d?.notes || '');
+      setNotes(Array.isArray(d?.notes)
+        ? d.notes
+        : (d?.notes ? [{ id: uid(), text: d.notes, createdAt: Date.now() }] : []));
       setAnnualAccountId(d?.annualAccountId || null);
       setInviteCode(d?.inviteCode || '');
       setHouseholdDocReady(true);
