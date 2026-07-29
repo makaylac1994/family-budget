@@ -114,7 +114,9 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   }
 
   function updateNote(id, note) {
-    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, note: note || undefined } : t)));
+    updateTransactions(transactions.map((t) => (t.id === id
+      ? { ...t, note: note || undefined, noteDismissed: note ? false : t.noteDismissed }
+      : t)));
   }
 
   const connectedAccountIds = useMemo(() => new Set((accounts || []).map((a) => a.id)), [accounts]);
@@ -1018,7 +1020,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                       <td className="px-4 py-2.5 text-right">
                         <div className="flex items-center justify-end gap-2.5">
                           <button onClick={() => toggleFlag(t.id)} style={{ color: t.flaggedForReview ? COLORS.gold : COLORS.inkSoft }} className="hover:text-amber-600" title={t.flaggedForReview ? 'Flagged for review — click to clear' : 'Flag for your partner to review'}>
-                            <Flag size={15} />
+                            <Flag size={15} fill={t.flaggedForReview ? COLORS.gold : 'none'} />
                           </button>
                           <button onClick={() => setExpandedNotes((p) => ({ ...p, [t.id]: !p[t.id] }))} style={{ color: t.note ? COLORS.violet : COLORS.inkSoft }} className="hover:text-violet-600" title={t.note ? 'Edit note' : 'Add a note'}>
                             <StickyNote size={15} />

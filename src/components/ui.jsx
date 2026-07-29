@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, Flame, Palette } from 'lucide-react';
 import { COLORS, PRESET_SWATCHES } from '../lib/constants';
 import { useCategoryColor } from '../lib/categoryColor';
-import { shiftMonth, monthLabel } from '../lib/helpers';
+import { shiftMonth, monthLabel, currentMonthStr } from '../lib/helpers';
 
 /* ---------------------------------- small UI ---------------------------------- */
 
@@ -217,8 +217,18 @@ export function GhostButton({ children, onClick, style, disabled }) {
 /* ---------------------------------- month nav ---------------------------------- */
 
 export function MonthNav({ month, setMonth }) {
+  const isCurrentMonth = month === currentMonthStr();
   return (
     <div className="flex items-center gap-2">
+      {!isCurrentMonth && (
+        <button
+          onClick={() => setMonth(currentMonthStr())}
+          className="font-body text-xs font-semibold rounded-full px-2.5 py-1"
+          style={{ color: COLORS.violet, background: COLORS.violetSoft }}
+        >
+          Today
+        </button>
+      )}
       <button onClick={() => setMonth(shiftMonth(month, -1))} className="rounded-full p-1.5 hover:bg-white/60" style={{ color: COLORS.inkSoft }}>
         <ChevronLeft size={18} />
       </button>

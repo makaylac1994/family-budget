@@ -87,13 +87,13 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
 
   const needsAllocatingItems = useMemo(
     () => transactions
-      .filter((t) => t.note && (!t.savingsAllocations || !t.savingsAllocations.length))
+      .filter((t) => t.note && !t.noteDismissed && (!t.savingsAllocations || !t.savingsAllocations.length))
       .sort((a, b) => b.date.localeCompare(a.date)),
     [transactions]
   );
 
   function clearNote(id) {
-    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, note: undefined } : t)));
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, noteDismissed: true } : t)));
   }
 
   const [showAddCharge, setShowAddCharge] = useState(false);
