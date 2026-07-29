@@ -123,9 +123,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   }
 
   function updateNote(id, note) {
-    updateTransactions(transactions.map((t) => (t.id === id
-      ? { ...t, note: note || undefined, noteDismissed: note ? false : t.noteDismissed }
-      : t)));
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, note: note || undefined } : t)));
   }
 
   const connectedAccountIds = useMemo(() => new Set((accounts || []).map((a) => a.id)), [accounts]);
@@ -1043,13 +1041,13 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                             <Flag size={15} fill={t.flaggedForReview ? COLORS.gold : 'none'} />
                           </button>
                           <button onClick={() => setExpandedNotes((p) => ({ ...p, [t.id]: !p[t.id] }))} style={{ color: t.note ? COLORS.violet : COLORS.inkSoft }} className="hover:text-violet-600" title={t.note ? 'Edit note' : 'Add a note'}>
-                            <StickyNote size={15} />
+                            <StickyNote size={15} fill={t.note ? COLORS.violet : 'none'} />
                           </button>
                           <button onClick={() => openAllocateModal(t)} style={{ color: t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : COLORS.inkSoft }} className="hover:text-teal-600" title="Choose bucket / allocate to savings">
-                            <PiggyBank size={15} />
+                            <PiggyBank size={15} fill={t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : 'none'} />
                           </button>
-                          <button onClick={() => openSplitModal(t)} style={{ color: COLORS.inkSoft }} className="hover:text-violet-600" title="Split transaction">
-                            <Scissors size={15} />
+                          <button onClick={() => openSplitModal(t)} style={{ color: t.splits && t.splits.length ? COLORS.violet : COLORS.inkSoft }} className="hover:text-violet-600" title="Split transaction">
+                            <Scissors size={15} fill={t.splits && t.splits.length ? COLORS.violet : 'none'} />
                           </button>
                           <button onClick={() => removeTransaction(t.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Delete">
                             <Trash2 size={15} />

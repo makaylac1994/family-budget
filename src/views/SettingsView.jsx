@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Check, X, Palette, Settings2, Trash2, Download, RefreshCw, Loader2, Plus } from 'lucide-react';
+import { Check, X, Palette, Settings2, Trash2, Download, RefreshCw, Loader2, Plus, ChevronDown, ChevronRight } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import { categoryColor } from '../lib/categoryColor';
 import { isSavingsAccount, todayStr, uid } from '../lib/helpers';
@@ -45,6 +45,7 @@ function NoteRow({ note, onSave, onDelete }) {
 }
 
 function NotesSection({ notes, updateNotes }) {
+  const [expanded, setExpanded] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [newText, setNewText] = useState('');
 
@@ -67,10 +68,15 @@ function NotesSection({ notes, updateNotes }) {
 
   return (
     <Card>
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Notes</h3>
-        <GhostButton onClick={() => setShowAdd((v) => !v)}><Plus size={14} /> Add note</GhostButton>
+      <div className="flex items-center justify-between mb-2 cursor-pointer" onClick={() => setExpanded((v) => !v)}>
+        <h3 className="font-display font-semibold flex items-center gap-1.5" style={{ color: COLORS.ink }}>
+          {expanded ? <ChevronDown size={16} style={{ color: COLORS.inkSoft }} /> : <ChevronRight size={16} style={{ color: COLORS.inkSoft }} />}
+          Notes {notes.length > 0 && <span style={{ color: COLORS.inkSoft }}>({notes.length})</span>}
+        </h3>
+        <GhostButton onClick={(e) => { e.stopPropagation(); setExpanded(true); setShowAdd(true); }}><Plus size={14} /> Add note</GhostButton>
       </div>
+      {expanded && (
+      <>
       <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
         Shared with everyone in this household &mdash; a good place to write down category definitions, rules of thumb, or anything you want to stay on the same page about.
       </p>
@@ -97,6 +103,8 @@ function NotesSection({ notes, updateNotes }) {
             <NoteRow key={n.id} note={n} onSave={(text) => updateNoteText(n.id, text)} onDelete={() => removeNote(n.id)} />
           ))}
         </div>
+      )}
+      </>
       )}
     </Card>
   );

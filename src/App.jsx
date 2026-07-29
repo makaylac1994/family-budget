@@ -403,6 +403,14 @@ export default function App() {
     setTab('ledger');
   }
 
+  function goToLedgerCategory(cat) {
+    setLedgerTypeFilter('All');
+    setLedgerSourceFilter('All');
+    setLedgerBucketFilter(null);
+    setLedgerCatFilter(cat);
+    setTab('ledger');
+  }
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg }}>
@@ -504,7 +512,7 @@ export default function App() {
               <AccountsView accounts={accounts} transactions={transactions} updateTransactions={updateTransactions} />
             )}
             {tab === 'budgets' && (
-              <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} />
+              <BudgetsView budgets={budgets} updateBudgets={updateBudgets} transactions={transactions} month={month} setMonth={setMonth} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} goals={goals} goToLedgerCategory={goToLedgerCategory} />
             )}
             {tab === 'savings' && (
               <SavingsView goals={goals} updateGoals={updateGoals} transactions={transactions} accounts={accounts} annualAccountId={annualAccountId} goToLedgerBucket={goToLedgerBucket} />

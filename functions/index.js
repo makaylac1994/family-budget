@@ -260,7 +260,6 @@ async function syncHouseholdInternal(householdId) {
           duplicateOfId: existingTx.duplicateOfId,
           flaggedForReview: existingTx.flaggedForReview,
           note: existingTx.note,
-          noteDismissed: existingTx.noteDismissed,
           addedAt: existingTx.addedAt,
         });
       } else {

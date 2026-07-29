@@ -7,7 +7,7 @@ import { Card, MonthNav, TextInput, PrimaryButton, EmptyState, CategoryBadge, Ca
 
 /* ---------------------------------- Budgets ---------------------------------- */
 
-export function BudgetsView({ budgets, updateBudgets, transactions, month, setMonth, categoryColors, updateCategoryColors, goals }) {
+export function BudgetsView({ budgets, updateBudgets, transactions, month, setMonth, categoryColors, updateCategoryColors, goals, goToLedgerCategory }) {
   const [newCat, setNewCat] = useState('');
   const [newLimit, setNewLimit] = useState('');
   const [colorPickerOpen, setColorPickerOpen] = useState({});
@@ -53,7 +53,12 @@ export function BudgetsView({ budgets, updateBudgets, transactions, month, setMo
     setColorPickerOpen((prev) => ({ ...prev, [cat]: !prev[cat] }));
   }
 
-  const entries = Object.entries(budgets);
+  // Firestore doesn't preserve map-field key order, so relying on
+  // Object.entries(budgets) directly makes cards visually reshuffle any
+  // time the household doc round-trips (e.g. after a color change writes
+  // categoryColors and the live listener re-fires with a fresh snapshot).
+  // Sorting explicitly keeps the order stable regardless of that.
+  const entries = Object.entries(budgets).sort((a, b) => a[0].localeCompare(b[0]));
 
   return (
     <div className="space-y-5">
@@ -92,7 +97,9 @@ export function BudgetsView({ budgets, updateBudgets, transactions, month, setMo
             return (
               <Card key={cat}>
                 <div className="flex items-center justify-between mb-2">
-                  <CategoryBadge cat={cat} />
+                  <button onClick={() => goToLedgerCategory(cat)} title={`View ${cat} in Ledger`}>
+                    <CategoryBadge cat={cat} />
+                  </button>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => toggleColorPicker(cat)}

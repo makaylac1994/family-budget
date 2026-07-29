@@ -85,15 +85,19 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
     updateTransactions(transactions.map((t) => (t.id === id ? { ...t, flaggedForReview: false } : t)));
   }
 
-  const needsAllocatingItems = useMemo(
+  // A transaction that's been allocated to a bucket but not yet confirmed
+  // as actually transferred (see the "Transferred" checkbox in the Ledger)
+  // -- real money still waiting to move, distinct from a plain note.
+  const pendingTransferItems = useMemo(
     () => transactions
-      .filter((t) => t.note && !t.noteDismissed && (!t.savingsAllocations || !t.savingsAllocations.length))
+      .filter((t) => t.savingsAllocations && t.savingsAllocations.length && t.savingsTransferConfirmed === false)
       .sort((a, b) => b.date.localeCompare(a.date)),
     [transactions]
   );
 
-  function clearNote(id) {
-    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, noteDismissed: true } : t)));
+  function bucketName(id) {
+    const g = goals.find((x) => x.id === id);
+    return g ? g.name : 'Deleted bucket';
   }
 
   const [showAddCharge, setShowAddCharge] = useState(false);
@@ -386,30 +390,27 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
           <button onClick={() => goToLedger('All', 'All')} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>View in Ledger &rarr;</button>
         </div>
 
-        {needsAllocatingItems.length > 0 && (
+        {pendingTransferItems.length > 0 && (
           <div className="mb-4">
-            <p className="font-body text-xs font-semibold mb-2" style={{ color: COLORS.inkSoft }}>Needs allocating</p>
+            <p className="font-body text-xs font-semibold mb-2" style={{ color: COLORS.inkSoft }}>Pending transfers</p>
             <div className="space-y-2">
-              {needsAllocatingItems.map((t) => (
-                <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
-                  <div className="min-w-0">
-                    <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
-                    <p className="font-body text-xs truncate" style={{ color: COLORS.inkSoft }}>{t.date} &middot; {t.note}</p>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <span className="font-display font-semibold text-sm" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
+              {pendingTransferItems.map((t) => {
+                const dir = t.savingsDirection || (t.type === 'income' ? 'withdraw' : 'deposit');
+                const label = t.savingsAllocations.length === 1
+                  ? `${formatCurrency(t.savingsAllocations[0].amount)} ${dir === 'withdraw' ? '←' : '→'} ${bucketName(t.savingsAllocations[0].bucketId)}`
+                  : `${formatCurrency(t.savingsAllocations.reduce((s, a) => s + a.amount, 0))} ${dir === 'withdraw' ? '←' : '→'} ${t.savingsAllocations.length} buckets`;
+                return (
+                  <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                    <div className="min-w-0">
+                      <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                      <p className="font-body text-xs truncate" style={{ color: COLORS.gold }}>{t.date} &middot; {label}</p>
+                    </div>
+                    <span className="font-display font-semibold text-sm flex-shrink-0" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
                       {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
                     </span>
-                    <button
-                      onClick={() => clearNote(t.id)}
-                      className="font-body text-xs font-semibold rounded-full px-2 py-1"
-                      style={{ background: COLORS.violetSoft, color: COLORS.violet }}
-                    >
-                      Clear
-                    </button>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -441,8 +442,8 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
           </div>
         )}
 
-        {upcomingCharges.length === 0 && needsAllocatingItems.length === 0 ? (
-          <EmptyState icon={PiggyBank} title="Nothing pending" subtitle="Leave a note on a transaction in the Ledger, or jot down a purchase that hasn't shown up here yet." />
+        {upcomingCharges.length === 0 && pendingTransferItems.length === 0 ? (
+          <EmptyState icon={PiggyBank} title="Nothing pending" subtitle="Allocate a transaction to a bucket in the Ledger, or jot down a purchase that hasn't shown up here yet." />
         ) : (
           <div className="space-y-2">
             {upcomingCharges.map((c) => (

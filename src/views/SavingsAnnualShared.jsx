@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { PiggyBank, Sparkles, Trash2, Check, Flame, Plus } from 'lucide-react';
+import { PiggyBank, Sparkles, Trash2, Check, Flame, Plus, Gift } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { formatCurrency, monthlySavingsNeeded, uid } from '../lib/helpers';
 import { Card, JarBar, TextInput, GhostButton } from '../components/ui';
 
 /* ---------------------------------- Goals ---------------------------------- */
 
-export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateTargetDate, updateSavedAmount, updateBucketName, removeBucket, onViewTransfers }) {
+export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateTargetDate, updateSavedAmount, updateBucketName, removeBucket, onViewTransfers, onGoToGifts }) {
   const hasTarget = g.target != null && g.target > 0;
   const pct = hasTarget ? (g.saved / g.target) * 100 : 0;
   const done = hasTarget && pct >= 100;
@@ -143,6 +143,15 @@ export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, o
           style={{ color: COLORS.violet }}
         >
           View transfers &rarr;
+        </button>
+      )}
+      {onGoToGifts && (
+        <button
+          onClick={onGoToGifts}
+          className="w-full font-body text-xs font-semibold mt-2 text-center inline-flex items-center justify-center gap-1"
+          style={{ color: COLORS.violet }}
+        >
+          <Gift size={12} /> Go to Gifts tab &rarr;
         </button>
       )}
     </Card>
