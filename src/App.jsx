@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from './firebase';
 import { doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, arrayUnion, collection, writeBatch, deleteField } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { Wallet, Receipt, PiggyBank, CalendarClock, Coins, Settings2, Landmark, Loader2 } from 'lucide-react';
+import { Wallet, Receipt, PiggyBank, CalendarClock, Coins, Settings2, Landmark, Loader2, Gift } from 'lucide-react';
 import { COLORS } from './lib/constants';
 import { CategoryColorContext } from './lib/categoryColor';
 import { generateInviteCode, currentMonthStr, groupTransactionsByMonth, uid, todayStr } from './lib/helpers';
@@ -15,6 +15,7 @@ import { BudgetsView } from './views/BudgetsView';
 import { SavingsView } from './views/SavingsView';
 import { AnnualView } from './views/AnnualView';
 import { SettingsView } from './views/SettingsView';
+import { GiftsView } from './views/GiftsView';
 
 /* ---------------------------------- App ---------------------------------- */
 
@@ -25,6 +26,7 @@ const TABS = [
   { id: 'budgets', label: 'Budgets', icon: PiggyBank },
   { id: 'savings', label: 'Savings', icon: Coins },
   { id: 'annual', label: 'Annual', icon: CalendarClock },
+  { id: 'gifts', label: 'Gifts', icon: Gift },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
 
@@ -59,6 +61,7 @@ export default function App() {
   const [accounts, setAccounts] = useState([]);
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [notes, setNotes] = useState([]);
+  const [giftOccasions, setGiftOccasions] = useState([]);
   const [annualAccountId, setAnnualAccountId] = useState(null);
 
   // Track sign-in state.
@@ -112,6 +115,7 @@ export default function App() {
       setNotes(Array.isArray(d?.notes)
         ? d.notes
         : (d?.notes ? [{ id: uid(), text: d.notes, createdAt: Date.now() }] : []));
+      setGiftOccasions(d?.giftOccasions || []);
       setAnnualAccountId(d?.annualAccountId || null);
       setInviteCode(d?.inviteCode || '');
       setHouseholdDocReady(true);
@@ -338,6 +342,7 @@ export default function App() {
   function updateHiddenCategories(next) { setHiddenCategories(next); syncField('hiddenCategories', next); }
   function updateCategoryMemory(next) { setCategoryMemory(next); syncField('categoryMemory', next); }
   function updateNotes(next) { setNotes(next); syncField('notes', next); }
+  function updateGiftOccasions(next) { setGiftOccasions(next); syncField('giftOccasions', next); }
   function updateAnnualAccountId(next) { setAnnualAccountId(next); syncField('annualAccountId', next); }
 
   function renameCategory(oldName, newName) {
@@ -506,6 +511,9 @@ export default function App() {
             )}
             {tab === 'annual' && (
               <AnnualView accounts={accounts} goals={goals} updateGoals={updateGoals} setTab={setTab} goToLedgerBucket={goToLedgerBucket} annualAccountId={annualAccountId} transactions={transactions} />
+            )}
+            {tab === 'gifts' && (
+              <GiftsView giftOccasions={giftOccasions} updateGiftOccasions={updateGiftOccasions} goals={goals} />
             )}
             {tab === 'settings' && (
               <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} migrateLegacyTransactions={migrateLegacyTransactions} transferPlans={transferPlans} updateTransferPlans={updateTransferPlans} completeTransferPlan={completeTransferPlan} undoTransferPlan={undoTransferPlan} />
