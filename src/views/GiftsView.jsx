@@ -27,6 +27,23 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, transacti
     .sort((a, b) => b.date.localeCompare(a.date))
     : [];
 
+  // Every gift purchase (Gifts-bucket withdrawal) split into what's been
+  // confirmed as actually transferred out of the bucket vs. still pending
+  // that confirmation -- same "Transferred" checkbox as the Ledger, just
+  // totaled up here for a real-time view of gift spending.
+  const giftSpendStats = giftsBucket ? transactions.reduce((acc, t) => {
+    if (t.savingsDirection !== 'withdraw') return acc;
+    const entries = (t.savingsAllocations || []).filter((a) => a.bucketId === giftsBucket.id);
+    if (entries.length === 0) return acc;
+    const amount = entries.reduce((s, a) => s + a.amount, 0);
+    const confirmed = t.savingsTransferConfirmed !== false;
+    return {
+      total: acc.total + amount,
+      confirmed: acc.confirmed + (confirmed ? amount : 0),
+      pending: acc.pending + (confirmed ? 0 : amount),
+    };
+  }, { total: 0, confirmed: 0, pending: 0 }) : { total: 0, confirmed: 0, pending: 0 };
+
   function linkedPurchasesFor(occasionId, recipientId) {
     return transactions.flatMap((t) => (t.savingsAllocations || [])
       .filter((a) => a.giftOccasionId === occasionId && a.giftRecipientId === recipientId)
@@ -292,6 +309,33 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, transacti
         </div>
         <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New occasion</PrimaryButton>
       </div>
+
+      {giftSpendStats.total > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Gift spending</h3>
+            <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{formatCurrency(giftSpendStats.total)} allocated</span>
+          </div>
+          <div style={{ display: 'flex', height: 14, borderRadius: 999, overflow: 'hidden', background: '#EEEBFA' }}>
+            {giftSpendStats.confirmed > 0 && (
+              <div style={{ width: `${(giftSpendStats.confirmed / giftSpendStats.total) * 100}%`, background: COLORS.teal }} />
+            )}
+            {giftSpendStats.pending > 0 && (
+              <div style={{ width: `${(giftSpendStats.pending / giftSpendStats.total) * 100}%`, background: COLORS.gold }} />
+            )}
+          </div>
+          <div className="flex items-center gap-4 mt-2">
+            <span className="font-body text-xs flex items-center gap-1.5" style={{ color: COLORS.inkSoft }}>
+              <span style={{ width: 8, height: 8, borderRadius: 999, background: COLORS.teal, display: 'inline-block' }} />
+              Transferred: {formatCurrency(giftSpendStats.confirmed)}
+            </span>
+            <span className="font-body text-xs flex items-center gap-1.5" style={{ color: COLORS.inkSoft }}>
+              <span style={{ width: 8, height: 8, borderRadius: 999, background: COLORS.gold, display: 'inline-block' }} />
+              Pending: {formatCurrency(giftSpendStats.pending)}
+            </span>
+          </div>
+        </Card>
+      )}
 
       {unassignedPurchases.length > 0 && (
         <Card>
