@@ -6,7 +6,7 @@ import { Card, PrimaryButton, GhostButton, TextInput, EmptyState, JarBar, Select
 
 /* ---------------------------------- Gifts ---------------------------------- */
 
-export function GiftsView({ giftOccasions, updateGiftOccasions, goals, transactions, updateTransactions }) {
+export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoals, transactions, updateTransactions }) {
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: '', date: '' });
   const [expanded, setExpanded] = useState({});
@@ -139,6 +139,20 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, transacti
   }
   const activeOccasions = sortByDate(giftOccasions.filter((o) => !o.archived));
   const archivedOccasions = sortByDate(giftOccasions.filter((o) => o.archived));
+
+  const budgetedTotal = activeOccasions.reduce((sum, o) => sum + o.recipients.reduce((s, r) => s + (Number(r.budget) || 0), 0), 0);
+  const spentTotal = activeOccasions.reduce((sum, o) => sum + o.recipients.reduce((s, r) => s + (r.purchased ? recipientActualCost(o, r) : 0), 0), 0);
+
+  // Keep the Gifts bucket's target in lockstep with what's actually
+  // budgeted across active occasions, so the Annual tab's targets sum
+  // reflects reality without re-typing it by hand whenever an occasion
+  // changes.
+  React.useEffect(() => {
+    if (!giftsBucket) return;
+    const rounded = Math.round(budgetedTotal * 100) / 100;
+    if (Math.abs((giftsBucket.target || 0) - rounded) < 0.005) return;
+    updateGoals(goals.map((g) => (g.id === giftsBucket.id ? { ...g, target: rounded > 0 ? rounded : null } : g)));
+  }, [budgetedTotal, giftsBucket, goals, updateGoals]);
 
   function renderOccasionCard(o) {
     const totalBudget = o.recipients.reduce((s, r) => s + (Number(r.budget) || 0), 0);
@@ -309,6 +323,16 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, transacti
         </div>
         <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New occasion</PrimaryButton>
       </div>
+
+      {budgetedTotal > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Gift budget</h3>
+            <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{formatCurrency(spentTotal)} of {formatCurrency(budgetedTotal)} spent</span>
+          </div>
+          <JarBar pct={budgetedTotal > 0 ? (spentTotal / budgetedTotal) * 100 : 0} height={14} />
+        </Card>
+      )}
 
       {giftSpendStats.total > 0 && (
         <Card>

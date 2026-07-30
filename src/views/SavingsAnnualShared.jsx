@@ -128,14 +128,18 @@ export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, o
         />
         <GhostButton onClick={onAddFunds}><Plus size={14} /> Add</GhostButton>
       </div>
-      <div className="mt-2">
-        <TextInput
-          type="number" min="0" placeholder="Set a target (optional)"
-          defaultValue={g.target || ''}
-          onBlur={(e) => updateTarget(g.id, e.target.value)}
-          style={{ fontSize: 12 }}
-        />
-      </div>
+      {onGoToGifts ? (
+        <p className="font-body text-xs mt-2" style={{ color: COLORS.inkSoft }}>Target follows your total budgeted in the Gifts tab.</p>
+      ) : (
+        <div className="mt-2">
+          <TextInput
+            type="number" min="0" placeholder="Set a target (optional)"
+            defaultValue={g.target || ''}
+            onBlur={(e) => updateTarget(g.id, e.target.value)}
+            style={{ fontSize: 12 }}
+          />
+        </div>
+      )}
       {onViewTransfers && (
         <button
           onClick={onViewTransfers}
