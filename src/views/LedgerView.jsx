@@ -340,8 +340,9 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
 
   function updateAmount(id, amount) {
     const tx = transactions.find((t) => t.id === id);
-    if (tx && tx.savingsAllocations && tx.savingsAllocations.length && bucketCategoryNames.includes(tx.category)) {
-      const newAlloc = tx.savingsAllocations.map((a) => ({ ...a, amount }));
+    if (tx && tx.savingsAllocations && tx.savingsAllocations.length && tx.amount > 0) {
+      const ratio = amount / tx.amount;
+      const newAlloc = tx.savingsAllocations.map((a) => ({ ...a, amount: Math.round(a.amount * ratio * 100) / 100 }));
       if (isAllocationApplied(tx)) {
         const sign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
         applyAllocationDelta(tx.savingsAllocations, sign, newAlloc, sign);
@@ -524,13 +525,21 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
       .filter((r) => r.bucketId && (Math.abs(parseFloat(r.amount)) || 0) > 0)
       .map((r) => ({ id: uid(), bucketId: r.bucketId, amount: Math.abs(parseFloat(r.amount)) || 0 }));
 
+    // New allocations start pending -- require the "Transferred" checkbox,
+    // same as the split and quick-category allocation paths, rather than
+    // moving the bucket balance the instant this modal is saved. Editing an
+    // already-confirmed allocation (e.g. nudging a split between buckets)
+    // keeps its confirmed state instead of silently un-confirming a
+    // transfer that already really happened.
+    const hadAllocations = !!(allocateTarget.savingsAllocations && allocateTarget.savingsAllocations.length);
     const wasApplied = isAllocationApplied(allocateTarget);
+    const nowConfirmed = hadAllocations ? wasApplied : false;
     const oldSign = allocationDirection(allocateTarget) === 'withdraw' ? -1 : 1;
     const newSign = allocateDirection === 'withdraw' ? -1 : 1;
-    applyAllocationDelta(wasApplied ? allocateTarget.savingsAllocations : [], oldSign, clean, newSign);
+    applyAllocationDelta(wasApplied ? allocateTarget.savingsAllocations : [], oldSign, nowConfirmed ? clean : [], newSign);
     updateTransactions(transactions.map((t) => (
       t.id === allocateTarget.id
-        ? { ...t, savingsAllocations: clean.length ? clean : undefined, savingsDirection: clean.length ? allocateDirection : undefined, savingsTransferConfirmed: undefined }
+        ? { ...t, savingsAllocations: clean.length ? clean : undefined, savingsDirection: clean.length ? allocateDirection : undefined, savingsTransferConfirmed: clean.length ? nowConfirmed : undefined }
         : t
     )));
     setAllocateTarget(null);

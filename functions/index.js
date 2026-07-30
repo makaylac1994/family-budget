@@ -229,6 +229,30 @@ async function syncHouseholdInternal(householdId) {
     });
     const byPlaidId = new Map(existing.filter((tx) => tx.plaidTransactionId).map((tx) => [tx.plaidTransactionId, tx]));
 
+    // A Plaid amount correction (most commonly a pending charge maturing to
+    // its final posted total) used to leave savingsAllocations frozen at
+    // whatever amount was true when first allocated -- silently drifting
+    // the bucket's saved balance out of sync with reality. Rescale
+    // proportionally instead, and carry the resulting delta into a single
+    // goals write alongside the accounts write below.
+    const householdSnap = await t.get(householdRef);
+    const existingGoals = householdSnap.data()?.goals || [];
+    const goalsDelta = {};
+    function accrueAllocationRescale(oldTx, newAmount) {
+      if (!oldTx.savingsAllocations || !oldTx.savingsAllocations.length || !(oldTx.amount > 0) || newAmount === oldTx.amount) {
+        return oldTx.savingsAllocations;
+      }
+      const ratio = newAmount / oldTx.amount;
+      const rescaled = oldTx.savingsAllocations.map((a) => ({ ...a, amount: Math.round(a.amount * ratio * 100) / 100 }));
+      if (oldTx.savingsTransferConfirmed !== false) {
+        const sign = (oldTx.savingsDirection || (oldTx.type === 'income' ? 'withdraw' : 'deposit')) === 'withdraw' ? -1 : 1;
+        oldTx.savingsAllocations.forEach((a, i) => {
+          goalsDelta[a.bucketId] = (goalsDelta[a.bucketId] || 0) + sign * (rescaled[i].amount - a.amount);
+        });
+      }
+      return rescaled;
+    }
+
     for (const [plaidId, val] of txUpdates) {
       if (val._removed) {
         // The bank says this transaction is gone (e.g. a pending charge that
@@ -252,7 +276,7 @@ async function syncHouseholdInternal(householdId) {
           splits: existingTx.splits,
           paymentSource: existingTx.paymentSource,
           excludeFromTotals: existingTx.excludeFromTotals,
-          savingsAllocations: existingTx.savingsAllocations,
+          savingsAllocations: accrueAllocationRescale(existingTx, val.amount),
           savingsDirection: existingTx.savingsDirection,
           savingsTransferConfirmed: existingTx.savingsTransferConfirmed,
           pendingRemoval: existingTx.pendingRemoval,
@@ -284,7 +308,7 @@ async function syncHouseholdInternal(householdId) {
         splits: pendingTx.splits,
         paymentSource: pendingTx.paymentSource,
         excludeFromTotals: pendingTx.excludeFromTotals,
-        savingsAllocations: pendingTx.savingsAllocations,
+        savingsAllocations: accrueAllocationRescale(pendingTx, tx.amount),
         savingsDirection: pendingTx.savingsDirection,
         savingsTransferConfirmed: pendingTx.savingsTransferConfirmed,
         addedAt: pendingTx.addedAt,
@@ -364,7 +388,8 @@ async function syncHouseholdInternal(householdId) {
       t.delete(txMonthsRef.doc(staleMonth));
     }
 
-    t.set(householdRef, { accounts: allAccounts }, { merge: true });
+    const updatedGoals = existingGoals.map((g) => (goalsDelta[g.id] ? { ...g, saved: Math.max(0, g.saved + goalsDelta[g.id]) } : g));
+    t.set(householdRef, { accounts: allAccounts, goals: updatedGoals }, { merge: true });
   });
 
   return { added: addedCount, modified: modifiedCount, removed: removedCount, deduped: dedupedCount };
