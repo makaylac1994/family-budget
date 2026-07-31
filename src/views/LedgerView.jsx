@@ -292,6 +292,10 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
     updateTransactions(transactions.map((t) => (t.id === id ? { ...t, category } : t)));
   }
 
+  function updateDate(id, date) {
+    updateTransactions(transactions.map((t) => (t.id === id ? { ...t, date } : t)));
+  }
+
   function updateCategoryOrAllocate(id, newValue) {
     const tx = transactions.find((t) => t.id === id);
     if (!tx) return;
@@ -895,7 +899,22 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           {selectedIds.has(t.id) && <Check size={10} style={{ color: '#fff' }} strokeWidth={3} />}
                         </div>
                       </td>
-                      <td className="px-4 py-2.5" style={{ color: COLORS.inkSoft }}>{t.date}</td>
+                      <td className="px-4 py-2.5">
+                        <input
+                          key={`date-${t.id}`}
+                          type="date"
+                          defaultValue={t.date}
+                          onBlur={(e) => {
+                            e.target.style.borderColor = 'transparent';
+                            e.target.style.background = 'transparent';
+                            if (e.target.value) updateDate(t.id, e.target.value);
+                          }}
+                          onFocus={(e) => { e.target.style.borderColor = COLORS.violet; e.target.style.background = '#fff'; }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                          className="font-body text-sm rounded-lg px-1 py-0.5 outline-none"
+                          style={{ color: COLORS.inkSoft, border: '1.5px solid transparent', background: 'transparent' }}
+                        />
+                      </td>
                       <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>
                         {t.description}
                         {t.addedAt && lastSyncAt && t.addedAt === lastSyncAt && (
