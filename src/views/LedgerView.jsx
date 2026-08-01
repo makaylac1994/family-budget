@@ -3,7 +3,7 @@ import Papa from 'papaparse';
 import {
   PiggyBank, Upload, Plus, Trash2, Search, ChevronRight, ChevronDown, ChevronUp,
   TrendingUp, TrendingDown, X, Check, Sparkles, Flame, Scissors, Settings2, Repeat,
-  Receipt, CreditCard, Landmark, ArrowUpDown, Clock, Flag, StickyNote,
+  Receipt, CreditCard, Landmark, ArrowUpDown, Clock, Flag, StickyNote, Layers,
 } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import {
@@ -64,6 +64,22 @@ function compareByField(a, b, field, flagType) {
   return 0;
 }
 
+function isRollupEligible(t) {
+  return t.excludeFromTotals === true
+    && !t.pendingRemoval
+    && !t.flaggedForReview
+    && !t.note
+    && !t.pending
+    && !(t.savingsAllocations && t.savingsAllocations.length && t.savingsTransferConfirmed === false);
+}
+
+function weekKeyOf(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00`);
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return monday.toISOString().slice(0, 10);
+}
+
 export function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts, catFilter, setCatFilter, sourceFilter, setSourceFilter, typeFilter, setTypeFilter, lastSyncAt, bucketFilter, setBucketFilter, renameCategory, categoryColors, updateCategoryColors }) {
   const [search, setSearch] = useState('');
   const [amountMin, setAmountMin] = useState('');
@@ -82,6 +98,8 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   const [expandedSplits, setExpandedSplits] = useState({});
   const [expandedNotes, setExpandedNotes] = useState({});
   const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [groupTransfers, setGroupTransfers] = useState(false);
+  const [expandedRollups, setExpandedRollups] = useState({});
   const [allocateTarget, setAllocateTarget] = useState(null);
   const [allocateRows, setAllocateRows] = useState([]);
   const [newBucketName, setNewBucketName] = useState('');
@@ -246,6 +264,31 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
       .filter((t) => t.description.toLowerCase().includes(search.toLowerCase()))
       .sort(compareTransactions);
   }, [transactions, month, catFilter, sourceFilter, typeFilter, bucketFilter, accountsById, search, dateFrom, dateTo, hasCustomDateRange, amountMin, amountMax, sortRules]);
+
+  const renderItems = useMemo(() => {
+    if (!groupTransfers) return filtered.map((t) => ({ type: 'tx', t }));
+    const items = [];
+    let run = [];
+    const flush = () => {
+      if (run.length >= 2) {
+        items.push({ type: 'rollup', id: `rollup-${run[0].id}`, items: run, total: run.reduce((s, x) => s + x.amount, 0) });
+      } else {
+        run.forEach((t) => items.push({ type: 'tx', t }));
+      }
+      run = [];
+    };
+    for (const t of filtered) {
+      const eligible = isRollupEligible(t);
+      if (eligible && (run.length === 0 || weekKeyOf(t.date) === weekKeyOf(run[run.length - 1].date))) {
+        run.push(t);
+      } else {
+        flush();
+        if (eligible) run.push(t); else items.push({ type: 'tx', t });
+      }
+    }
+    flush();
+    return items;
+  }, [filtered, groupTransfers]);
 
   const filteredSummary = useMemo(() => {
     let countedIncome = 0, countedExpense = 0, excludedTotal = 0, excludedCount = 0;
@@ -665,6 +708,12 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
         <GhostButton onClick={() => setShowSort((v) => !v)}>
           <ArrowUpDown size={15} /> Sort
         </GhostButton>
+        <GhostButton
+          onClick={() => setGroupTransfers((v) => !v)}
+          style={groupTransfers ? { background: COLORS.violet, color: '#fff' } : undefined}
+        >
+          <Layers size={15} /> Group transfers
+        </GhostButton>
         <GhostButton onClick={() => setShowCategoryManager(true)}><Settings2 size={15} /> Categories</GhostButton>
         <GhostButton onClick={() => setShowImport(true)}><Upload size={15} /> Import CSV</GhostButton>
         {orphanedTransactions.length > 0 && (
@@ -883,7 +932,39 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((t) => (
+                {renderItems.map((item) => {
+                  if (item.type === 'rollup') {
+                    return (
+                      <tr key={item.id} className="border-b last:border-0" style={{ borderColor: COLORS.border, background: COLORS.bg }}>
+                        <td className="pl-4 pr-1 py-2.5"></td>
+                        <td colSpan={4} className="px-4 py-2.5">
+                          <button
+                            onClick={() => setExpandedRollups((p) => ({ ...p, [item.id]: !p[item.id] }))}
+                            className="flex items-center justify-between w-full text-left"
+                          >
+                            <span className="flex items-center gap-1.5 font-body text-sm font-semibold" style={{ color: COLORS.inkSoft }}>
+                              {expandedRollups[item.id] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                              {item.items.length} transfers this week
+                            </span>
+                            <span className="font-body text-sm font-semibold" style={{ color: COLORS.gold }}>{formatCurrency(item.total)} excluded</span>
+                          </button>
+                          {expandedRollups[item.id] && (
+                            <div className="mt-2 space-y-1 pl-5">
+                              {item.items.map((t) => (
+                                <div key={t.id} className="flex items-center justify-between text-xs" style={{ color: COLORS.inkSoft }}>
+                                  <span>{t.date} &middot; {t.description}</span>
+                                  <span>{formatCurrency(t.amount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5"></td>
+                      </tr>
+                    );
+                  }
+                  const t = item.t;
+                  return (
                   <React.Fragment key={t.id}>
                     <tr className="border-b last:border-0" style={{ borderColor: COLORS.border }}>
                       <td className="pl-4 pr-1 py-2.5">
@@ -1098,7 +1179,8 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                       </tr>
                     ))}
                   </React.Fragment>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
