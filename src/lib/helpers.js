@@ -58,6 +58,31 @@ export function monthLabel(monthStr) {
   return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 }
 
+// A budget value is either a plain number (never edited since creation --
+// applies to every month) or a sorted array of { effectiveFrom, amount }
+// entries, where effectiveFrom '' means "since the beginning". This lets
+// editing a limit only affect the current and future months while past
+// months keep showing what was actually budgeted at the time.
+export function budgetAmountForMonth(value, month) {
+  if (typeof value === 'number') return value;
+  if (!value || !value.length) return 0;
+  const sorted = [...value].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
+  let amount = sorted[0].amount;
+  for (const entry of sorted) {
+    if (entry.effectiveFrom <= month) amount = entry.amount;
+    else break;
+  }
+  return amount;
+}
+
+export function setBudgetAmountFromNow(value, newAmount) {
+  const now = currentMonthStr();
+  const existing = typeof value === 'number' ? [{ effectiveFrom: '', amount: value }] : (value || []);
+  const withoutCurrent = existing.filter((e) => e.effectiveFrom !== now);
+  return [...withoutCurrent, { effectiveFrom: now, amount: newAmount }]
+    .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
+}
+
 export function shiftMonth(monthStr, delta) {
   const [y, m] = monthStr.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);

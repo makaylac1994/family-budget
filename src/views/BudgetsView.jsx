@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Plus, PiggyBank, Palette, Trash2 } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import { categoryColor } from '../lib/categoryColor';
-import { formatCurrency } from '../lib/helpers';
+import { formatCurrency, currentMonthStr, budgetAmountForMonth, setBudgetAmountFromNow } from '../lib/helpers';
 import { Card, MonthNav, TextInput, PrimaryButton, EmptyState, CategoryBadge, CategoryColorPicker, JarBar } from '../components/ui';
 
 /* ---------------------------------- Budgets ---------------------------------- */
@@ -35,8 +35,11 @@ export function BudgetsView({ budgets, updateBudgets, transactions, month, setMo
     setNewCat(''); setNewLimit('');
   }
 
+  const isEditable = month >= currentMonthStr();
+
   function updateLimit(cat, val) {
-    updateBudgets({ ...budgets, [cat]: parseFloat(val) || 0 });
+    if (!isEditable) return;
+    updateBudgets({ ...budgets, [cat]: setBudgetAmountFromNow(budgets[cat], parseFloat(val) || 0) });
   }
 
   function removeCategory(cat) {
@@ -91,7 +94,8 @@ export function BudgetsView({ budgets, updateBudgets, transactions, month, setMo
         <Card><EmptyState icon={PiggyBank} title="No budgets yet" subtitle="Add your first category above to start tracking limits." /></Card>
       ) : (
         <div className="grid sm:grid-cols-2 gap-4">
-          {entries.map(([cat, limit]) => {
+          {entries.map(([cat, rawValue]) => {
+            const limit = budgetAmountForMonth(rawValue, month);
             const spent = spentByCategory[cat] || 0;
             const pct = limit ? (spent / limit) * 100 : 0;
             return (
@@ -125,7 +129,9 @@ export function BudgetsView({ budgets, updateBudgets, transactions, month, setMo
                     <input
                       type="number" min="0" value={limit}
                       onChange={(e) => updateLimit(cat, e.target.value)}
-                      className="w-20 rounded-lg px-2 py-1 text-right font-semibold text-sm outline-none"
+                      disabled={!isEditable}
+                      title={isEditable ? undefined : 'Past months are locked — budgets can only be changed from the current month forward.'}
+                      className="w-20 rounded-lg px-2 py-1 text-right font-semibold text-sm outline-none disabled:opacity-60"
                       style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink }}
                     />
                   </div>

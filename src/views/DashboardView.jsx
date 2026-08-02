@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { CategoryColorContext, categoryColor } from '../lib/categoryColor';
-import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr, toggleMonthEntry, isTransferPlanDone, uid } from '../lib/helpers';
+import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr, toggleMonthEntry, isTransferPlanDone, uid, budgetAmountForMonth } from '../lib/helpers';
 import { Card, MonthNav, EmptyState, CategoryBadge, JarBar, TextInput, GhostButton } from '../components/ui';
 
 /* ---------------------------------- Dashboard ---------------------------------- */
@@ -32,7 +32,7 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
   const realSavingsTotal = (accounts || [])
     .filter(isSavingsAccount)
     .reduce((s, a) => s + (Number(a.balance) || 0), 0);
-  const plannedBudgetTotal = Object.values(budgets).reduce((s, limit) => s + (Number(limit) || 0), 0);
+  const plannedBudgetTotal = Object.values(budgets).reduce((s, v) => s + budgetAmountForMonth(v, month), 0);
 
   const byCategory = {};
   expenseTx.forEach((t) => {
@@ -52,8 +52,8 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
     setHiddenChartCats((prev) => (prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]));
   }
 
-  const budgetRows = Object.entries(budgets).map(([cat, limit]) => ({
-    cat, limit, spent: byCategory[cat] || 0,
+  const budgetRows = Object.entries(budgets).map(([cat, v]) => ({
+    cat, limit: budgetAmountForMonth(v, month), spent: byCategory[cat] || 0,
   })).sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1))).slice(0, 4);
 
   // Both the cushion and the checklist below are scoped to the real current
