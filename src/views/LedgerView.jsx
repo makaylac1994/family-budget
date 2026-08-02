@@ -3,7 +3,7 @@ import Papa from 'papaparse';
 import {
   PiggyBank, Upload, Plus, Trash2, Search, ChevronRight, ChevronDown, ChevronUp,
   TrendingUp, TrendingDown, X, Check, Sparkles, Flame, Scissors, Settings2, Repeat,
-  Receipt, CreditCard, Landmark, ArrowUpDown, Clock, Flag, StickyNote, Layers,
+  Receipt, CreditCard, Landmark, ArrowUpDown, Clock, Flag, StickyNote, Layers, Link2,
 } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import {
@@ -100,6 +100,9 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [groupTransfers, setGroupTransfers] = useState(false);
   const [expandedRollups, setExpandedRollups] = useState({});
+  const [linkTarget, setLinkTarget] = useState(null);
+  const [linkSearch, setLinkSearch] = useState('');
+  const [expandedLinks, setExpandedLinks] = useState({});
   const [allocateTarget, setAllocateTarget] = useState(null);
   const [allocateRows, setAllocateRows] = useState([]);
   const [newBucketName, setNewBucketName] = useState('');
@@ -166,7 +169,11 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
     if (orphanSelected.size === 0) return;
     if (!window.confirm(`Permanently delete ${orphanSelected.size} transaction(s)? This can't be undone.`)) return;
     reverseAllocationsForBulkDelete(transactions.filter((t) => orphanSelected.has(t.id)));
-    updateTransactions(transactions.filter((t) => !orphanSelected.has(t.id)));
+    updateTransactions(
+      transactions
+        .filter((t) => !orphanSelected.has(t.id))
+        .map((t) => (t.linkedTransferId && orphanSelected.has(t.linkedTransferId) ? { ...t, linkedTransferId: undefined } : t))
+    );
     setOrphanSelected(new Set());
     setShowOrphanReview(false);
   }
@@ -183,7 +190,11 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
     if (selectedIds.size === 0) return;
     if (!window.confirm(`Delete ${selectedIds.size} selected transaction(s)? This can't be undone.`)) return;
     reverseAllocationsForBulkDelete(transactions.filter((t) => selectedIds.has(t.id)));
-    updateTransactions(transactions.filter((t) => !selectedIds.has(t.id)));
+    updateTransactions(
+      transactions
+        .filter((t) => !selectedIds.has(t.id))
+        .map((t) => (t.linkedTransferId && selectedIds.has(t.linkedTransferId) ? { ...t, linkedTransferId: undefined } : t))
+    );
     setSelectedIds(new Set());
   }
 
@@ -267,8 +278,21 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
       .sort(compareTransactions);
   }, [transactions, month, catFilter, sourceFilter, typeFilter, bucketFilter, accountsById, search, dateFrom, dateTo, hasCustomDateRange, amountMin, amountMax, sortRules]);
 
+  const transactionsById = useMemo(() => indexById(transactions), [transactions]);
+
+  const absorbedTransferIds = useMemo(() => {
+    const s = new Set();
+    filtered.forEach((t) => { if (t.linkedTransferId && transactionsById[t.linkedTransferId]) s.add(t.linkedTransferId); });
+    return s;
+  }, [filtered, transactionsById]);
+
+  const visibleFiltered = useMemo(
+    () => filtered.filter((t) => !absorbedTransferIds.has(t.id)),
+    [filtered, absorbedTransferIds]
+  );
+
   const renderItems = useMemo(() => {
-    if (!groupTransfers) return filtered.map((t) => ({ type: 'tx', t }));
+    if (!groupTransfers) return visibleFiltered.map((t) => ({ type: 'tx', t }));
     const items = [];
     let run = [];
     const flush = () => {
@@ -279,7 +303,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
       }
       run = [];
     };
-    for (const t of filtered) {
+    for (const t of visibleFiltered) {
       const eligible = isRollupEligible(t);
       if (eligible && (run.length === 0 || weekKeyOf(t.date) === weekKeyOf(run[run.length - 1].date))) {
         run.push(t);
@@ -290,7 +314,20 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
     }
     flush();
     return items;
-  }, [filtered, groupTransfers]);
+  }, [visibleFiltered, groupTransfers]);
+
+  const linkCandidates = useMemo(() => {
+    if (!linkTarget) return [];
+    const monthKey = linkTarget.date.slice(0, 7);
+    const linkedElsewhere = new Set(
+      transactions.filter((t) => t.linkedTransferId && t.id !== linkTarget.id).map((t) => t.linkedTransferId)
+    );
+    return transactions
+      .filter((t) => t.id !== linkTarget.id && t.excludeFromTotals && t.date.startsWith(monthKey))
+      .filter((t) => !linkedElsewhere.has(t.id) || t.id === linkTarget.linkedTransferId)
+      .filter((t) => t.description.toLowerCase().includes(linkSearch.toLowerCase()))
+      .sort((a, b) => Math.abs(a.amount - linkTarget.amount) - Math.abs(b.amount - linkTarget.amount));
+  }, [linkTarget, linkSearch, transactions]);
 
   const filteredSummary = useMemo(() => {
     let countedIncome = 0, countedExpense = 0, excludedTotal = 0, excludedCount = 0;
@@ -326,7 +363,11 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
       const oldSign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
       applyAllocationDelta(tx.savingsAllocations, oldSign, [], 1);
     }
-    updateTransactions(transactions.filter((t) => t.id !== id));
+    updateTransactions(
+      transactions
+        .filter((t) => t.id !== id)
+        .map((t) => (t.linkedTransferId === id ? { ...t, linkedTransferId: undefined } : t))
+    );
   }
 
   const bucketCategoryNames = useMemo(() => goals.map((g) => g.name), [goals]);
@@ -445,6 +486,21 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
           }
         : t
     )));
+  }
+
+  function openLinkModal(t) {
+    setLinkTarget(t);
+    setLinkSearch('');
+  }
+
+  function linkTransfer(transferId) {
+    updateTransactions(transactions.map((t) => (t.id === linkTarget.id ? { ...t, linkedTransferId: transferId } : t)));
+    setLinkTarget(null);
+  }
+
+  function unlinkTransfer() {
+    updateTransactions(transactions.map((t) => (t.id === linkTarget.id ? { ...t, linkedTransferId: undefined } : t)));
+    setLinkTarget(null);
   }
 
   function openSplitModal(t) {
@@ -1129,6 +1185,26 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                             </div>
                           );
                         })()}
+                        {t.linkedTransferId && transactionsById[t.linkedTransferId] && (() => {
+                          const linked = transactionsById[t.linkedTransferId];
+                          return (
+                            <div className="mt-1">
+                              <button
+                                onClick={() => setExpandedLinks((p) => ({ ...p, [t.id]: !p[t.id] }))}
+                                className="inline-flex items-center gap-1 font-body text-xs font-semibold"
+                                style={{ color: COLORS.teal }}
+                              >
+                                {expandedLinks[t.id] ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                                <Link2 size={11} /> Reconciled with bank transfer
+                              </button>
+                              {expandedLinks[t.id] && (
+                                <p className="font-body text-xs mt-0.5 pl-4" style={{ color: COLORS.inkSoft }}>
+                                  {linked.date} &middot; {linked.description} &middot; {formatCurrency(linked.amount)}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-2.5">
                         {t.splits && t.splits.length ? (
@@ -1175,6 +1251,11 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           <button onClick={() => openSplitModal(t)} style={{ color: t.splits && t.splits.length ? COLORS.violet : COLORS.inkSoft }} className="hover:text-violet-600" title="Split transaction">
                             <Scissors size={15} fill={t.splits && t.splits.length ? COLORS.violet : 'none'} />
                           </button>
+                          {!t.excludeFromTotals && (
+                            <button onClick={() => openLinkModal(t)} style={{ color: t.linkedTransferId ? COLORS.teal : COLORS.inkSoft }} className="hover:text-teal-600" title={t.linkedTransferId ? 'Change linked bank transfer' : 'Link to a real bank transfer'}>
+                              <Link2 size={15} />
+                            </button>
+                          )}
                           <button onClick={() => removeTransaction(t.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Delete">
                             <Trash2 size={15} />
                           </button>
@@ -1287,6 +1368,53 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                 </div>
               </>
             )}
+          </Card>
+        </div>
+      )}
+
+      {linkTarget && (
+        <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+          <Card style={{ maxWidth: 440, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Link to a bank transfer</h3>
+              <button onClick={() => setLinkTarget(null)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+            </div>
+
+            <div className="rounded-xl px-3 py-2 mb-3" style={{ background: COLORS.bg }}>
+              <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{linkTarget.description}</p>
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{linkTarget.date} &middot; {formatCurrency(linkTarget.amount)}</p>
+            </div>
+
+            {linkTarget.linkedTransferId && transactionsById[linkTarget.linkedTransferId] && (
+              <div className="flex items-center justify-between rounded-xl px-3 py-2 mb-3" style={{ background: COLORS.violetSoft }}>
+                <span className="font-body text-xs" style={{ color: COLORS.violet }}>
+                  Currently linked: {transactionsById[linkTarget.linkedTransferId].description}
+                </span>
+                <GhostButton onClick={unlinkTransfer}>Unlink</GhostButton>
+              </div>
+            )}
+
+            <TextInput placeholder="Search transactions..." value={linkSearch} onChange={(e) => setLinkSearch(e.target.value)} />
+
+            <div className="mt-2 space-y-1 max-h-72 overflow-y-auto">
+              {linkCandidates.length === 0 ? (
+                <p className="font-body text-xs py-4 text-center" style={{ color: COLORS.inkSoft }}>No matching transfer transactions found this month.</p>
+              ) : linkCandidates.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => linkTransfer(c.id)}
+                  className="w-full flex items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-violet-50"
+                  style={{ background: c.id === linkTarget.linkedTransferId ? COLORS.violetSoft : 'transparent' }}
+                >
+                  <span className="font-body text-xs" style={{ color: COLORS.ink }}>{c.date} &middot; {c.description}</span>
+                  <span className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>{formatCurrency(c.amount)}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="flex justify-end mt-3">
+              <GhostButton onClick={() => setLinkTarget(null)}>Close</GhostButton>
+            </div>
           </Card>
         </div>
       )}

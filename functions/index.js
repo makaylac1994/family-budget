@@ -284,6 +284,7 @@ async function syncHouseholdInternal(householdId) {
           duplicateOfId: existingTx.duplicateOfId,
           flaggedForReview: existingTx.flaggedForReview,
           note: existingTx.note,
+          linkedTransferId: existingTx.linkedTransferId,
           addedAt: existingTx.addedAt,
         });
       } else {
@@ -297,11 +298,19 @@ async function syncHouseholdInternal(householdId) {
     // Fold the two into one continuous ledger entry (carrying over any
     // category/splits/etc. the user already set on the pending version)
     // instead of leaving a "bank says this is gone" flag on the old one.
+    //
+    // A pending transaction's id changes when it posts (plaid:<pendingId> ->
+    // plaid:<postedId>), so if another transaction was linked to it via
+    // linkedTransferId while it was still pending, that reference needs to
+    // be rewritten too, or it'll point at an id that no longer exists.
+    const idRemap = new Map();
     for (const tx of Array.from(byPlaidId.values())) {
       if (!tx.pendingTransactionId) continue;
       const pendingTx = byPlaidId.get(tx.pendingTransactionId);
       if (!pendingTx) continue;
       byPlaidId.delete(tx.pendingTransactionId);
+      const newId = `plaid:${tx.plaidTransactionId}`;
+      idRemap.set(pendingTx.id, newId);
       byPlaidId.set(tx.plaidTransactionId, {
         ...tx,
         category: pendingTx.category,
@@ -311,8 +320,16 @@ async function syncHouseholdInternal(householdId) {
         savingsAllocations: accrueAllocationRescale(pendingTx, tx.amount),
         savingsDirection: pendingTx.savingsDirection,
         savingsTransferConfirmed: pendingTx.savingsTransferConfirmed,
+        linkedTransferId: pendingTx.linkedTransferId,
         addedAt: pendingTx.addedAt,
       });
+    }
+    if (idRemap.size) {
+      for (const [key, tx] of byPlaidId.entries()) {
+        if (tx.linkedTransferId && idRemap.has(tx.linkedTransferId)) {
+          byPlaidId.set(key, { ...tx, linkedTransferId: idRemap.get(tx.linkedTransferId) });
+        }
+      }
     }
 
     // Cross-connection duplicate guard: if a bank was disconnected and
