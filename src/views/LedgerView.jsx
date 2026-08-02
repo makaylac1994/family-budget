@@ -165,6 +165,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   function deleteSelectedOrphans() {
     if (orphanSelected.size === 0) return;
     if (!window.confirm(`Permanently delete ${orphanSelected.size} transaction(s)? This can't be undone.`)) return;
+    reverseAllocationsForBulkDelete(transactions.filter((t) => orphanSelected.has(t.id)));
     updateTransactions(transactions.filter((t) => !orphanSelected.has(t.id)));
     setOrphanSelected(new Set());
     setShowOrphanReview(false);
@@ -181,6 +182,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   function deleteSelected() {
     if (selectedIds.size === 0) return;
     if (!window.confirm(`Delete ${selectedIds.size} selected transaction(s)? This can't be undone.`)) return;
+    reverseAllocationsForBulkDelete(transactions.filter((t) => selectedIds.has(t.id)));
     updateTransactions(transactions.filter((t) => !selectedIds.has(t.id)));
     setSelectedIds(new Set());
   }
@@ -564,6 +566,21 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
       const delta = newSign * (newByBucket[g.id] || 0) - oldSign * (oldByBucket[g.id] || 0);
       return { ...g, saved: Math.max(0, g.saved + delta) };
     }));
+  }
+
+  function reverseAllocationsForBulkDelete(txList) {
+    const deltaByBucket = {};
+    txList.forEach((tx) => {
+      if (!isAllocationApplied(tx)) return;
+      const sign = allocationDirection(tx) === 'withdraw' ? -1 : 1;
+      tx.savingsAllocations.forEach((a) => {
+        deltaByBucket[a.bucketId] = (deltaByBucket[a.bucketId] || 0) - sign * a.amount;
+      });
+    });
+    if (Object.keys(deltaByBucket).length === 0) return;
+    updateGoals(goals.map((g) => (
+      deltaByBucket[g.id] ? { ...g, saved: Math.max(0, g.saved + deltaByBucket[g.id]) } : g
+    )));
   }
 
   function confirmAllocate() {
