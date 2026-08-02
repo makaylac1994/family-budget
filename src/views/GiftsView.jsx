@@ -142,6 +142,8 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoa
 
   const budgetedTotal = activeOccasions.reduce((sum, o) => sum + o.recipients.reduce((s, r) => s + (Number(r.budget) || 0), 0), 0);
   const spentTotal = activeOccasions.reduce((sum, o) => sum + o.recipients.reduce((s, r) => s + (r.purchased ? recipientActualCost(o, r) : 0), 0), 0);
+  const needed = Math.max(0, budgetedTotal - spentTotal);
+  const remainingCount = activeOccasions.reduce((s, o) => s + o.recipients.filter((r) => !r.purchased).length, 0);
 
   // Keep the Gifts bucket's target in lockstep with what's actually
   // budgeted across active occasions, so the Annual tab's targets sum
@@ -331,6 +333,30 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoa
             <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{formatCurrency(spentTotal)} of {formatCurrency(budgetedTotal)} spent</span>
           </div>
           <JarBar pct={budgetedTotal > 0 ? (spentTotal / budgetedTotal) * 100 : 0} height={14} />
+
+          {giftsBucket && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-body text-xs font-semibold" style={{ color: COLORS.ink }}>Available in Gifts bucket</span>
+                <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{formatCurrency(giftsBucket.saved || 0)} of {formatCurrency(budgetedTotal)}</span>
+              </div>
+              <div style={{ background: '#EEEBFA', borderRadius: 999, height: 14, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.min(100, ((giftsBucket.saved || 0) / budgetedTotal) * 100)}%`, height: '100%', borderRadius: 999,
+                  background: (giftsBucket.saved || 0) >= needed ? COLORS.teal : COLORS.coral,
+                  transition: 'width 0.5s ease',
+                }} />
+              </div>
+            </div>
+          )}
+
+          {giftsBucket && needed > 0 && (
+            <p className="font-body text-xs mt-2" style={{ color: (giftsBucket.saved || 0) >= needed ? COLORS.inkSoft : COLORS.coral }}>
+              {(giftsBucket.saved || 0) >= needed
+                ? `You have enough set aside for the ${remainingCount} gift${remainingCount === 1 ? '' : 's'} left to buy.`
+                : `Still need ${formatCurrency(needed - (giftsBucket.saved || 0))} more for the ${remainingCount} gift${remainingCount === 1 ? '' : 's'} left to buy.`}
+            </p>
+          )}
         </Card>
       )}
 
