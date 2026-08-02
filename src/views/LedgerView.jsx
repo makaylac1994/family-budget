@@ -104,6 +104,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   const [linkTarget, setLinkTarget] = useState(null);
   const [linkSearch, setLinkSearch] = useState('');
   const [expandedLinks, setExpandedLinks] = useState({});
+  const [expandedDetails, setExpandedDetails] = useState({});
   const [allocateTarget, setAllocateTarget] = useState(null);
   const [allocateRows, setAllocateRows] = useState([]);
   const [newBucketName, setNewBucketName] = useState('');
@@ -1030,6 +1031,11 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                     );
                   }
                   const t = item.t;
+                  const hasNote = !!t.note;
+                  const hasAllocation = t.savingsAllocations && t.savingsAllocations.length > 0;
+                  const hasLink = t.linkedTransferId && transactionsById[t.linkedTransferId];
+                  const detailsOpen = expandedDetails[t.id] || expandedNotes[t.id];
+                  const hasDetails = hasNote || hasAllocation || hasLink || detailsOpen;
                   return (
                   <React.Fragment key={t.id}>
                     <tr className="border-b last:border-0" style={{ borderColor: COLORS.border }}>
@@ -1120,6 +1126,20 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                             <Repeat size={11} /> {t.excludeFromTotals ? 'Excluded from totals' : 'Exclude from totals'}
                           </button>
                         </div>
+                        {hasDetails && (
+                          <div className="mt-1">
+                            <button
+                              onClick={() => setExpandedDetails((p) => ({ ...p, [t.id]: !p[t.id] }))}
+                              className="inline-flex items-center gap-1.5 font-body text-xs"
+                              style={{ color: COLORS.inkSoft }}
+                            >
+                              {detailsOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                              {hasNote && <StickyNote size={11} style={{ color: COLORS.violet }} />}
+                              {hasAllocation && <PiggyBank size={11} style={{ color: COLORS.teal }} />}
+                              {hasLink && <Link2 size={11} style={{ color: COLORS.teal }} />}
+                            </button>
+                            {detailsOpen && (
+                            <div className="mt-1 space-y-1">
                         {expandedNotes[t.id] ? (
                           <input
                             key={`note-${t.id}`}
@@ -1198,6 +1218,10 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                             </div>
                           );
                         })()}
+                            </div>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-2.5">
                         {t.splits && t.splits.length ? (
