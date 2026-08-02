@@ -891,14 +891,14 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
               className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold font-body"
               style={{ background: '#fff', color: COLORS.violet }}
             >
-              <Repeat size={13} /> Mark as transfer
+              <Repeat size={13} /> Exclude from totals
             </button>
             <button
               onClick={() => markSelectedAsTransfer(false)}
               className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold font-body"
               style={{ background: '#fff', color: COLORS.inkSoft }}
             >
-              Unmark transfer
+              Include in totals
             </button>
             <button
               onClick={deleteSelected}
@@ -1117,7 +1117,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                               : { background: COLORS.bg, color: COLORS.inkSoft }}
                             title="Mark as a transfer (e.g. paying your credit card bill) so it isn't double-counted as spending"
                           >
-                            <Repeat size={11} /> {t.excludeFromTotals ? 'Transfer (excluded)' : 'Mark as transfer'}
+                            <Repeat size={11} /> {t.excludeFromTotals ? 'Excluded from totals' : 'Exclude from totals'}
                           </button>
                         </div>
                         {expandedNotes[t.id] ? (
@@ -1241,14 +1241,14 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           <button onClick={() => openAllocateModal(t)} style={{ color: t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : COLORS.inkSoft }} className="hover:text-teal-600" title="Choose bucket / allocate to savings">
                             <PiggyBank size={15} fill={t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : 'none'} />
                           </button>
-                          <button onClick={() => openSplitModal(t)} style={{ color: t.splits && t.splits.length ? COLORS.violet : COLORS.inkSoft }} className="hover:text-violet-600" title="Split transaction">
-                            <Scissors size={15} fill={t.splits && t.splits.length ? COLORS.violet : 'none'} />
-                          </button>
-                          {!t.excludeFromTotals && (
+                          {!t.excludeFromTotals && t.savingsAllocations && t.savingsAllocations.length > 0 && (
                             <button onClick={() => openLinkModal(t)} style={{ color: t.linkedTransferId ? COLORS.teal : COLORS.inkSoft }} className="hover:text-teal-600" title={t.linkedTransferId ? 'Change linked bank transfer' : 'Link to a real bank transfer'}>
                               <Link2 size={15} />
                             </button>
                           )}
+                          <button onClick={() => openSplitModal(t)} style={{ color: t.splits && t.splits.length ? COLORS.violet : COLORS.inkSoft }} className="hover:text-violet-600" title="Split transaction">
+                            <Scissors size={15} fill={t.splits && t.splits.length ? COLORS.violet : 'none'} />
+                          </button>
                           <button onClick={() => removeTransaction(t.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500" title="Delete">
                             <Trash2 size={15} />
                           </button>
