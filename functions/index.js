@@ -1,10 +1,11 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
-const admin = require('firebase-admin');
+const { initializeApp } = require('firebase-admin/app');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 const { Configuration, PlaidApi, PlaidEnvironments } = require('plaid');
 
-admin.initializeApp();
-const db = admin.firestore();
+initializeApp();
+const db = getFirestore();
 db.settings({ ignoreUndefinedProperties: true });
 
 // Switch to 'production' once you've tested end-to-end in Sandbox and are
@@ -444,7 +445,7 @@ exports.exchangePublicToken = onCall({ secrets: [PLAID_CLIENT_ID, PLAID_SECRET] 
     accessToken: exchange.data.access_token,
     institutionName: institutionName || 'Bank',
     cursor: null,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
   });
 
   const summary = await syncHouseholdInternal(householdId);

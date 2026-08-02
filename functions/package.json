@@ -2,15 +2,15 @@
   "name": "functions",
   "description": "Cloud Functions for Family Budget (Plaid integration)",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "scripts": {
     "deploy": "firebase deploy --only functions"
   },
   "dependencies": {
-    "firebase-admin": "^12.1.0",
-    "firebase-functions": "^5.0.0",
-    "plaid": "^27.0.0"
+    "firebase-admin": "^14.2.0",
+    "firebase-functions": "^7.3.2",
+    "plaid": "^45.0.0"
   }
 }
