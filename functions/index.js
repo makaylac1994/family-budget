@@ -129,6 +129,11 @@ async function syncHouseholdInternal(householdId) {
   const itemsSnap = await db.collection('plaid_items').where('householdId', '==', householdId).get();
   if (itemsSnap.empty) return;
 
+  // One timestamp for the whole sync pass, not a fresh Date.now() per
+  // transaction -- the Ledger's "New" badge matches addedAt against this
+  // exact value, so everything touched in this sync needs to share it.
+  const syncStartedAt = Date.now();
+
   const householdRef = db.collection('households').doc(householdId);
   const allAccounts = [];
   const txUpdates = new Map(); // plaidTransactionId -> transaction object, or { _removed: true }
@@ -180,7 +185,7 @@ async function syncHouseholdInternal(householdId) {
           excludeFromTotals: isTransferCategory(primary) ? true : undefined,
           pending: tx.pending,
           pendingTransactionId: tx.pending_transaction_id || undefined,
-          addedAt: Date.now(),
+          addedAt: syncStartedAt,
         });
       });
       resp.data.modified.forEach((tx) => {
@@ -407,7 +412,7 @@ async function syncHouseholdInternal(householdId) {
     }
 
     const updatedGoals = existingGoals.map((g) => (goalsDelta[g.id] ? { ...g, saved: Math.max(0, g.saved + goalsDelta[g.id]) } : g));
-    t.set(householdRef, { accounts: allAccounts, goals: updatedGoals }, { merge: true });
+    t.set(householdRef, { accounts: allAccounts, goals: updatedGoals, lastSyncAt: syncStartedAt }, { merge: true });
   });
 
   return { added: addedCount, modified: modifiedCount, removed: removedCount, deduped: dedupedCount };
