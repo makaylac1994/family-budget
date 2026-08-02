@@ -83,6 +83,19 @@ export function setBudgetAmountFromNow(value, newAmount) {
     .sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
 }
 
+// Same income/expense/net rules as the Dashboard's single-month KPI cards,
+// generalized to run once per month for a trend view instead of just the
+// currently-browsed month.
+export function monthlyNetSeries(transactions, bucketNameSet, monthKeys) {
+  const grouped = groupTransactionsByMonth(transactions);
+  return monthKeys.map((month) => {
+    const monthTx = grouped.get(month) || [];
+    const income = monthTx.filter((t) => t.type === 'income' && !t.excludeFromTotals).reduce((s, t) => s + t.amount, 0);
+    const expense = monthTx.filter((t) => t.type === 'expense' && !t.excludeFromTotals).reduce((s, t) => s + nonBucketAmount(t, bucketNameSet), 0);
+    return { month, income, expense, net: income - expense };
+  });
+}
+
 export function shiftMonth(monthStr, delta) {
   const [y, m] = monthStr.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);

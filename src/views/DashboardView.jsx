@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { CategoryColorContext, categoryColor } from '../lib/categoryColor';
-import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr, toggleMonthEntry, isTransferPlanDone, uid, budgetAmountForMonth } from '../lib/helpers';
+import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr, toggleMonthEntry, isTransferPlanDone, uid, budgetAmountForMonth, monthlyNetSeries, shiftMonth, monthLabel } from '../lib/helpers';
 import { Card, MonthNav, EmptyState, CategoryBadge, JarBar, TextInput, GhostButton } from '../components/ui';
 
 /* ---------------------------------- Dashboard ---------------------------------- */
@@ -34,6 +34,15 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
     .reduce((s, a) => s + (Number(a.balance) || 0), 0);
   const plannedBudgetTotal = Object.values(budgets).reduce((s, v) => s + budgetAmountForMonth(v, month), 0);
 
+  const trendMonths = useMemo(() => {
+    const end = currentMonthStr();
+    return Array.from({ length: 6 }, (_, i) => shiftMonth(end, i - 5));
+  }, []);
+  const netSeries = useMemo(
+    () => monthlyNetSeries(transactions, bucketNameSet, trendMonths),
+    [transactions, bucketNameSet, trendMonths]
+  );
+
   const byCategory = {};
   expenseTx.forEach((t) => {
     if (t.splits && t.splits.length) {
@@ -54,7 +63,7 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
 
   const budgetRows = Object.entries(budgets).map(([cat, v]) => ({
     cat, limit: budgetAmountForMonth(v, month), spent: byCategory[cat] || 0,
-  })).sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1))).slice(0, 4);
+  })).sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1)));
 
   // Both the cushion and the checklist below are scoped to the real current
   // month (not whatever month is being browsed above via MonthNav) — the
@@ -214,6 +223,23 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
         </Card>
       </div>
 
+      <Card>
+        <h3 className="font-display font-semibold mb-3" style={{ color: COLORS.ink }}>Monthly net</h3>
+        <div style={{ width: '100%', height: 200 }}>
+          <ResponsiveContainer>
+            <BarChart data={netSeries.map((r) => ({ ...r, label: monthLabel(r.month) }))} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} tickFormatter={(v) => v.split(' ')[0]} />
+              <YAxis tick={{ fontSize: 11, fill: COLORS.inkSoft }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} width={55} />
+              <Tooltip formatter={(v) => formatCurrency(v)} labelFormatter={(v) => v} />
+              <Bar dataKey="net" name="Net" radius={[6, 6, 6, 6]} maxBarSize={40}>
+                {netSeries.map((r, i) => <Cell key={i} fill={r.net >= 0 ? COLORS.teal : COLORS.coral} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+
       <div className="grid lg:grid-cols-5 gap-5">
         <Card className="lg:col-span-2">
           <div className="flex items-center justify-between mb-3">
@@ -306,7 +332,7 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
           {budgetRows.length === 0 ? (
             <EmptyState icon={PiggyBank} title="No budgets set" subtitle="Set monthly limits per category to track progress." />
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
               {budgetRows.map((r) => (
                 <div key={r.cat}>
                   <div className="flex justify-between text-sm font-body mb-1">
