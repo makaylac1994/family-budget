@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react';
-import { Check, X, Palette, Settings2, Trash2, Download, RefreshCw, Loader2, Plus, ChevronDown, ChevronRight } from 'lucide-react';
+import React, { useState, useRef, useMemo } from 'react';
+import { Check, X, Palette, Settings2, Trash2, Download, RefreshCw, Loader2, Plus, ChevronDown, ChevronRight, Bold, List, ListOrdered, IndentIncrease, IndentDecrease } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import { categoryColor } from '../lib/categoryColor';
 import { isSavingsAccount, todayStr, uid } from '../lib/helpers';
+import { renderNoteHtml, wrapSelection, prefixLines, indentLines } from '../lib/noteFormatting';
 import { Card, CategoryBadge, TextInput, CategoryColorPicker, Select, GhostButton, PrimaryButton, EmptyState } from '../components/ui';
 import { BillsView } from './BillsView';
 import { TransferPlanSection } from './TransferPlanSection';
@@ -10,6 +11,8 @@ import { TransferPlanSection } from './TransferPlanSection';
 function NoteRow({ note, onSave, onDelete }) {
   const [text, setText] = useState(note.text);
   const [saved, setSaved] = useState(true);
+  const [isEditing, setIsEditing] = useState(false);
+  const textareaRef = useRef(null);
 
   React.useEffect(() => { setText(note.text); }, [note.text]);
 
@@ -21,7 +24,33 @@ function NoteRow({ note, onSave, onDelete }) {
   function handleBlur() {
     if (text !== note.text) onSave(text);
     setSaved(true);
+    setIsEditing(false);
   }
+
+  function startEditing() {
+    setIsEditing(true);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  function applyFormat(fn) {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const { next, selStart, selEnd } = fn(ta);
+    setText(next);
+    setSaved(false);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(selStart, selEnd);
+    });
+  }
+
+  const toolbarButtons = [
+    { icon: Bold, title: 'Bold', action: (ta) => wrapSelection(ta, '**') },
+    { icon: List, title: 'Bullet list', action: (ta) => prefixLines(ta, '- ') },
+    { icon: ListOrdered, title: 'Numbered list', action: (ta) => prefixLines(ta, '1. ') },
+    { icon: IndentIncrease, title: 'Indent', action: (ta) => indentLines(ta, 1) },
+    { icon: IndentDecrease, title: 'Outdent', action: (ta) => indentLines(ta, -1) },
+  ];
 
   return (
     <div className="rounded-xl p-3" style={{ background: COLORS.bg }}>
@@ -31,15 +60,45 @@ function NoteRow({ note, onSave, onDelete }) {
           <Trash2 size={14} />
         </button>
       </div>
-      <textarea
-        value={text}
-        onChange={handleChange}
-        onBlur={handleBlur}
-        rows={4}
-        className="w-full rounded-xl px-3 py-2 text-sm font-body outline-none resize-y"
-        style={{ border: `1.5px solid ${COLORS.border}`, color: COLORS.ink, background: '#fff' }}
-        onFocus={(e) => { e.target.style.borderColor = COLORS.violet; }}
-      />
+      {isEditing ? (
+        <>
+          <div className="flex items-center gap-1 mb-1.5">
+            {toolbarButtons.map(({ icon: Icon, title, action }) => (
+              <button
+                key={title}
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); applyFormat(action); }}
+                title={title}
+                className="rounded-lg p-1.5 hover:bg-white"
+                style={{ color: COLORS.inkSoft }}
+              >
+                <Icon size={13} />
+              </button>
+            ))}
+          </div>
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            rows={4}
+            autoFocus
+            className="w-full rounded-xl px-3 py-2 text-sm font-body outline-none resize-y"
+            style={{ border: `1.5px solid ${COLORS.violet}`, color: COLORS.ink, background: '#fff' }}
+          />
+        </>
+      ) : text.trim() ? (
+        <div
+          onClick={startEditing}
+          className="font-body text-sm cursor-text"
+          style={{ color: COLORS.ink }}
+          dangerouslySetInnerHTML={{ __html: renderNoteHtml(text) }}
+        />
+      ) : (
+        <p onClick={startEditing} className="font-body text-sm italic cursor-text" style={{ color: COLORS.inkSoft }}>
+          Empty note — click to edit
+        </p>
+      )}
     </div>
   );
 }
