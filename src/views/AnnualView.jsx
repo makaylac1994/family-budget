@@ -190,6 +190,7 @@ export function AnnualView({ accounts, goals, updateGoals, setTab, goToLedgerBuc
               removeBucket={removeBucket}
               onViewTransfers={() => goToLedgerBucket(g.id)}
               onGoToGifts={g.name.trim().toLowerCase() === 'gifts' ? () => setTab('gifts') : undefined}
+              transactions={transactions}
             />
           ))}
         </div>

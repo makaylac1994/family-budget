@@ -9,6 +9,7 @@ import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import {
   uid, indexById, isSavingsAccount, formatCurrency, todayStr, normalizeDescription,
   merchantToken, txSignature, detectHeaderMap, rowToTransaction, paymentSourceFor,
+  allocationDirection, isAllocationApplied,
 } from '../lib/helpers';
 import {
   Card, TextInput, Select, PrimaryButton, GhostButton, MonthNav, EmptyState,
@@ -202,14 +203,6 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
     if (selectedIds.size === 0) return;
     updateTransactions(transactions.map((t) => (selectedIds.has(t.id) ? { ...t, excludeFromTotals: exclude } : t)));
     setSelectedIds(new Set());
-  }
-
-  function allocationDirection(t) {
-    return t.savingsDirection || (t.type === 'income' ? 'withdraw' : 'deposit');
-  }
-
-  function isAllocationApplied(t) {
-    return !!(t.savingsAllocations && t.savingsAllocations.length && t.savingsTransferConfirmed !== false);
   }
 
   function rememberCategory(description, category) {

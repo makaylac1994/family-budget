@@ -177,6 +177,7 @@ export function SavingsView({ goals, updateGoals, transactions, accounts, annual
                             updateBucketName={updateBucketName}
                             removeBucket={removeBucket}
                             onViewTransfers={() => goToLedgerBucket(g.id)}
+                            transactions={transactions}
                           />
                         ))}
                       </div>
@@ -207,6 +208,7 @@ export function SavingsView({ goals, updateGoals, transactions, accounts, annual
                     updateBucketName={updateBucketName}
                     removeBucket={removeBucket}
                     onViewTransfers={() => goToLedgerBucket(g.id)}
+                    transactions={transactions}
                   />
                 ))}
               </div>

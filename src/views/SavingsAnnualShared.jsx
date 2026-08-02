@@ -1,16 +1,18 @@
-import React, { useState } from 'react';
-import { PiggyBank, Sparkles, Trash2, Check, Flame, Plus, Gift } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { PiggyBank, Sparkles, Trash2, Check, Flame, Plus, Gift, ChevronDown, ChevronRight } from 'lucide-react';
 import { COLORS } from '../lib/constants';
-import { formatCurrency, monthlySavingsNeeded, uid } from '../lib/helpers';
+import { formatCurrency, monthlySavingsNeeded, uid, todayStr, bucketActivity } from '../lib/helpers';
 import { Card, JarBar, TextInput, GhostButton } from '../components/ui';
 
 /* ---------------------------------- Goals ---------------------------------- */
 
-export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateTargetDate, updateSavedAmount, updateBucketName, removeBucket, onViewTransfers, onGoToGifts }) {
+export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateTargetDate, updateSavedAmount, updateBucketName, removeBucket, onViewTransfers, onGoToGifts, transactions }) {
   const hasTarget = g.target != null && g.target > 0;
   const pct = hasTarget ? (g.saved / g.target) * 100 : 0;
   const done = hasTarget && pct >= 100;
   const monthlyNeeded = monthlySavingsNeeded(g);
+  const [showActivity, setShowActivity] = useState(false);
+  const activity = useMemo(() => bucketActivity(g, transactions), [g, transactions]);
 
   return (
     <Card>
@@ -140,10 +142,42 @@ export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, o
           />
         </div>
       )}
+      <button
+        onClick={() => setShowActivity((v) => !v)}
+        className="w-full font-body text-xs font-semibold mt-3 flex items-center justify-center gap-1"
+        style={{ color: COLORS.violet }}
+      >
+        {showActivity ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        Activity ({activity.length})
+      </button>
+      {showActivity && (
+        <div className="mt-2 space-y-1.5 max-h-64 overflow-y-auto pr-1">
+          {activity.length === 0 ? (
+            <p className="font-body text-xs text-center py-3" style={{ color: COLORS.inkSoft }}>No activity recorded yet.</p>
+          ) : activity.map((e) => (
+            <div key={e.id} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5" style={{ background: COLORS.bg }}>
+              <div className="min-w-0">
+                <p className="font-body text-xs truncate" style={{ color: COLORS.ink }}>{e.description}</p>
+                <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                  {e.date}{!e.confirmed && ' · Pending'}
+                </p>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <p className="font-body text-xs font-semibold" style={{ color: e.amount >= 0 ? COLORS.teal : COLORS.coral }}>
+                  {e.amount >= 0 ? '+' : '-'}{formatCurrency(Math.abs(e.amount))}
+                </p>
+                {e.balanceAfter != null && (
+                  <p className="font-body" style={{ color: COLORS.inkSoft, fontSize: 10 }}>{formatCurrency(e.balanceAfter)}</p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {onViewTransfers && (
         <button
           onClick={onViewTransfers}
-          className="w-full font-body text-xs font-semibold mt-3 text-center"
+          className="w-full font-body text-xs font-semibold mt-2 text-center"
           style={{ color: COLORS.violet }}
         >
           View transfers &rarr;
@@ -187,7 +221,9 @@ export function useBucketActions(goals, updateGoals, { defaultAccountId } = {}) 
   function addFunds(id) {
     const amt = parseFloat(deposits[id]);
     if (!amt) return;
-    updateGoals(goals.map((g) => (g.id === id ? { ...g, saved: g.saved + amt } : g)));
+    updateGoals(goals.map((g) => (g.id === id
+      ? { ...g, saved: g.saved + amt, savedHistory: [...(g.savedHistory || []), { id: uid(), date: todayStr(), delta: amt, type: 'manual' }] }
+      : g)));
     setDeposit(id, '');
   }
 
@@ -202,7 +238,12 @@ export function useBucketActions(goals, updateGoals, { defaultAccountId } = {}) 
 
   function updateSavedAmount(id, val) {
     const v = Math.max(0, parseFloat(val) || 0);
-    updateGoals(goals.map((g) => (g.id === id ? { ...g, saved: v } : g)));
+    updateGoals(goals.map((g) => {
+      if (g.id !== id) return g;
+      const delta = v - g.saved;
+      if (delta === 0) return g;
+      return { ...g, saved: v, savedHistory: [...(g.savedHistory || []), { id: uid(), date: todayStr(), delta, type: 'manual' }] };
+    }));
   }
 
   function updateBucketName(id, val) {

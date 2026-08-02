@@ -96,6 +96,40 @@ export function monthlyNetSeries(transactions, bucketNameSet, monthKeys) {
   });
 }
 
+// A bucket's full activity log: manual deposits/adjustments (from
+// savedHistory) plus every ledger-linked allocation, newest first, with a
+// running balance computed backward from the bucket's current (known-correct)
+// saved total. Buckets that existed before savedHistory started being
+// recorded just won't have entries before that point -- no fabricated
+// starting balance.
+export function bucketActivity(goal, transactions) {
+  const manual = (goal.savedHistory || []).map((h) => ({
+    id: h.id,
+    date: h.date,
+    description: h.delta >= 0 ? 'Manual deposit' : 'Manual adjustment',
+    amount: h.delta,
+    confirmed: true,
+  }));
+  const ledger = (transactions || [])
+    .filter((t) => t.savingsAllocations && t.savingsAllocations.some((a) => a.bucketId === goal.id))
+    .map((t) => {
+      const sign = allocationDirection(t) === 'withdraw' ? -1 : 1;
+      const amount = sign * t.savingsAllocations
+        .filter((a) => a.bucketId === goal.id)
+        .reduce((s, a) => s + a.amount, 0);
+      return { id: t.id, date: t.date, description: t.description, amount, confirmed: isAllocationApplied(t) };
+    });
+  const combined = [...manual, ...ledger].sort((a, b) => b.date.localeCompare(a.date));
+
+  let balance = goal.saved || 0;
+  return combined.map((entry) => {
+    if (!entry.confirmed) return { ...entry, balanceAfter: null };
+    const balanceAfter = balance;
+    balance -= entry.amount;
+    return { ...entry, balanceAfter };
+  });
+}
+
 export function shiftMonth(monthStr, delta) {
   const [y, m] = monthStr.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
@@ -147,6 +181,14 @@ export function groupTransactionsByMonth(list) {
     grouped.get(key).push(t);
   }
   return grouped;
+}
+
+export function allocationDirection(t) {
+  return t.savingsDirection || (t.type === 'income' ? 'withdraw' : 'deposit');
+}
+
+export function isAllocationApplied(t) {
+  return !!(t.savingsAllocations && t.savingsAllocations.length && t.savingsTransferConfirmed !== false);
 }
 
 // Determines whether a transaction was paid from a bank account ('bank') or
