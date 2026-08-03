@@ -2,11 +2,13 @@ import React, { useState, useMemo } from 'react';
 import { PiggyBank, Sparkles, Trash2, Check, Flame, Plus, Gift, ChevronDown, ChevronRight } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { formatCurrency, monthlySavingsNeeded, uid, todayStr, bucketActivity } from '../lib/helpers';
+import { AccountNicknameContext, applyAccountNicknames } from '../lib/accountNicknames';
 import { Card, JarBar, TextInput, GhostButton } from '../components/ui';
 
 /* ---------------------------------- Goals ---------------------------------- */
 
 export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, onDepositChange, onAddFunds, updateGoalAccount, updateTarget, updateTargetDate, updateSavedAmount, updateBucketName, removeBucket, onViewTransfers, onGoToGifts, transactions }) {
+  const accountNicknames = React.useContext(AccountNicknameContext);
   const hasTarget = g.target != null && g.target > 0;
   const pct = hasTarget ? (g.saved / g.target) * 100 : 0;
   const done = hasTarget && pct >= 100;
@@ -157,7 +159,7 @@ export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, o
           ) : activity.map((e) => (
             <div key={e.id} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5" style={{ background: COLORS.bg }}>
               <div className="min-w-0">
-                <p className="font-body text-xs truncate" style={{ color: COLORS.ink }}>{e.description}</p>
+                <p className="font-body text-xs truncate" style={{ color: COLORS.ink }}>{applyAccountNicknames(e.description, accountNicknames)}</p>
                 <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
                   {e.date}{!e.confirmed && ' · Pending'}
                 </p>

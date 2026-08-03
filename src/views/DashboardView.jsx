@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { CategoryColorContext, categoryColor } from '../lib/categoryColor';
+import { AccountNicknameContext, applyAccountNicknames } from '../lib/accountNicknames';
 import { isSavingsAccount, isCheckingAccount, indexById, formatCurrency, nonBucketAmount, paymentSourceFor, currentMonthStr, toggleMonthEntry, isTransferPlanDone, uid, budgetAmountForMonth, monthlyNetSeries, shiftMonth, monthLabel } from '../lib/helpers';
 import { Card, MonthNav, EmptyState, CategoryBadge, JarBar, TextInput, GhostButton } from '../components/ui';
 
@@ -13,6 +14,7 @@ import { Card, MonthNav, EmptyState, CategoryBadge, JarBar, TextInput, GhostButt
 
 export function DashboardView({ transactions, updateTransactions, budgets, bills, updateBills, goals, month, setMonth, setTab, accounts, goToLedger, transferPlans, completeTransferPlan, upcomingCharges, updateUpcomingCharges }) {
   const categoryColors = React.useContext(CategoryColorContext);
+  const accountNicknames = React.useContext(AccountNicknameContext);
   const [hiddenChartCats, setHiddenChartCats] = useState([]);
   const [showChartFilter, setShowChartFilter] = useState(false);
   const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
@@ -385,7 +387,7 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
             {flaggedItems.map((t) => (
               <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
                 <div className="min-w-0">
-                  <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                  <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{applyAccountNicknames(t.description, accountNicknames)}</p>
                   <p className="font-body text-xs truncate" style={{ color: COLORS.inkSoft }}>
                     {t.date}{t.note ? ` · ${t.note}` : ''}
                   </p>
@@ -428,7 +430,7 @@ export function DashboardView({ transactions, updateTransactions, budgets, bills
                 return (
                   <div key={t.id} className="flex items-center justify-between gap-3 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
                     <div className="min-w-0">
-                      <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                      <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{applyAccountNicknames(t.description, accountNicknames)}</p>
                       <p className="font-body text-xs truncate" style={{ color: COLORS.gold }}>{t.date} &middot; {label}</p>
                     </div>
                     <span className="font-display font-semibold text-sm flex-shrink-0" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>

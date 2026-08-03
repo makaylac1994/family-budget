@@ -5,6 +5,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { Wallet, Receipt, PiggyBank, CalendarClock, Coins, Settings2, Landmark, Loader2, Gift } from 'lucide-react';
 import { COLORS } from './lib/constants';
 import { CategoryColorContext } from './lib/categoryColor';
+import { AccountNicknameContext } from './lib/accountNicknames';
 import { generateInviteCode, currentMonthStr, groupTransactionsByMonth, uid, todayStr } from './lib/helpers';
 import { AuthGate } from './auth/AuthGate';
 import { HouseholdSetup } from './auth/HouseholdSetup';
@@ -56,6 +57,7 @@ export default function App() {
   const [transferPlans, setTransferPlans] = useState([]);
   const [upcomingCharges, setUpcomingCharges] = useState([]);
   const [categoryColors, setCategoryColors] = useState({});
+  const [accountNicknames, setAccountNicknames] = useState({});
   const [hiddenCategories, setHiddenCategories] = useState([]);
   const [categoryMemory, setCategoryMemory] = useState({ exact: {}, merchant: {} });
   const [accounts, setAccounts] = useState([]);
@@ -108,6 +110,7 @@ export default function App() {
       setTransferPlans(d?.transferPlans || []);
       setUpcomingCharges(d?.upcomingCharges || []);
       setCategoryColors(d?.categoryColors || {});
+      setAccountNicknames(d?.accountNicknames || {});
       setHiddenCategories(d?.hiddenCategories || []);
       setCategoryMemory(d?.categoryMemory || { exact: {}, merchant: {} });
       setAccounts(d?.accounts || []);
@@ -339,6 +342,7 @@ export default function App() {
     updateTransferPlans(transferPlans.map((p) => (p.id === planId ? { ...p, completions: nextCompletions } : p)));
   }
   function updateCategoryColors(next) { setCategoryColors(next); syncField('categoryColors', next); }
+  function updateAccountNicknames(next) { setAccountNicknames(next); syncField('accountNicknames', next); }
   function updateHiddenCategories(next) { setHiddenCategories(next); syncField('hiddenCategories', next); }
   function updateCategoryMemory(next) { setCategoryMemory(next); syncField('categoryMemory', next); }
   function updateNotes(next) { setNotes(next); syncField('notes', next); }
@@ -437,6 +441,7 @@ export default function App() {
 
   return (
     <CategoryColorContext.Provider value={categoryColors}>
+    <AccountNicknameContext.Provider value={accountNicknames}>
     <div className="min-h-screen font-body" style={{ background: COLORS.bg }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
@@ -524,12 +529,13 @@ export default function App() {
               <GiftsView giftOccasions={giftOccasions} updateGiftOccasions={updateGiftOccasions} goals={goals} updateGoals={updateGoals} transactions={transactions} updateTransactions={updateTransactions} />
             )}
             {tab === 'settings' && (
-              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} migrateLegacyTransactions={migrateLegacyTransactions} transferPlans={transferPlans} updateTransferPlans={updateTransferPlans} completeTransferPlan={completeTransferPlan} undoTransferPlan={undoTransferPlan} />
+              <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} migrateLegacyTransactions={migrateLegacyTransactions} transferPlans={transferPlans} updateTransferPlans={updateTransferPlans} completeTransferPlan={completeTransferPlan} undoTransferPlan={undoTransferPlan} accountNicknames={accountNicknames} updateAccountNicknames={updateAccountNicknames} />
             )}
           </>
         )}
       </main>
     </div>
+    </AccountNicknameContext.Provider>
     </CategoryColorContext.Provider>
   );
 }

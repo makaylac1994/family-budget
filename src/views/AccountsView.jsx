@@ -6,6 +6,7 @@ import { functions } from '../firebase';
 import { COLORS } from '../lib/constants';
 import { formatCurrency } from '../lib/helpers';
 import { Card, PrimaryButton, GhostButton, EmptyState } from '../components/ui';
+import { AccountNicknameContext, applyAccountNicknames } from '../lib/accountNicknames';
 
 /* ---------------------------------- Accounts ---------------------------------- */
 
@@ -63,6 +64,7 @@ function ConnectBankButton({ onConnected }) {
 }
 
 export function AccountsView({ accounts, transactions, updateTransactions }) {
+  const accountNicknames = React.useContext(AccountNicknameContext);
   const [syncing, setSyncing] = useState(false);
   const [disconnectingId, setDisconnectingId] = useState(null);
   const [error, setError] = useState('');
@@ -246,7 +248,7 @@ export function AccountsView({ accounts, transactions, updateTransactions }) {
                         {newTx.map((t) => (
                           <div key={t.id} className="flex items-center justify-between rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
                             <div className="min-w-0">
-                              <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                              <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{applyAccountNicknames(t.description, accountNicknames)}</p>
                               <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{t.date} &middot; {t.category}</p>
                             </div>
                             <span className="font-display font-semibold text-sm flex-shrink-0 ml-2" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
@@ -300,7 +302,7 @@ export function AccountsView({ accounts, transactions, updateTransactions }) {
                     <div key={t.id} className="rounded-xl px-3 py-2.5" style={{ background: COLORS.bg }}>
                       <div className="flex items-center justify-between gap-2 mb-1.5">
                         <div className="min-w-0">
-                          <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{t.description}</p>
+                          <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{applyAccountNicknames(t.description, accountNicknames)}</p>
                           <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
                             {t.date} &middot; {t.pendingRemovalReason === 'duplicate' ? 'Possible duplicate' : "Bank says this is gone"}
                           </p>
@@ -312,7 +314,7 @@ export function AccountsView({ accounts, transactions, updateTransactions }) {
                       {linked ? (
                         <p className="font-body text-xs mb-2 rounded-lg px-2 py-1.5" style={{ background: '#fff', color: COLORS.inkSoft }}>
                           {t.pendingRemovalReason === 'duplicate' ? 'Kept instead: ' : 'May have already posted as: '}
-                          <span style={{ color: COLORS.ink, fontWeight: 600 }}>{linked.description}</span> on {linked.date} for {formatCurrency(linked.amount)}
+                          <span style={{ color: COLORS.ink, fontWeight: 600 }}>{applyAccountNicknames(linked.description, accountNicknames)}</span> on {linked.date} for {formatCurrency(linked.amount)}
                         </p>
                       ) : t.pendingRemovalReason === 'removed_by_bank' ? (
                         <p className="font-body text-xs mb-2" style={{ color: COLORS.inkSoft }}>

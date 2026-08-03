@@ -16,6 +16,7 @@ import {
   CategoryBadge, CategoryEditCell, AmountEditCell,
 } from '../components/ui';
 import { CategoryManager } from './SettingsView';
+import { AccountNicknameContext, applyAccountNicknames } from '../lib/accountNicknames';
 
 /* ---------------------------------- Ledger ---------------------------------- */
 
@@ -82,6 +83,7 @@ function weekKeyOf(dateStr) {
 }
 
 export function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts, catFilter, setCatFilter, sourceFilter, setSourceFilter, typeFilter, setTypeFilter, lastSyncAt, bucketFilter, setBucketFilter, renameCategory, categoryColors, updateCategoryColors }) {
+  const accountNicknames = React.useContext(AccountNicknameContext);
   const [search, setSearch] = useState('');
   const [amountMin, setAmountMin] = useState('');
   const [amountMax, setAmountMax] = useState('');
@@ -1026,7 +1028,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                             <div className="mt-2 space-y-1 pl-5">
                               {item.items.map((t) => (
                                 <div key={t.id} className="flex items-center justify-between text-xs" style={{ color: COLORS.inkSoft }}>
-                                  <span>{t.date} &middot; {t.description}</span>
+                                  <span>{t.date} &middot; {applyAccountNicknames(t.description, accountNicknames)}</span>
                                   <span>{formatCurrency(t.amount)}</span>
                                 </div>
                               ))}
@@ -1079,7 +1081,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                         />
                       </td>
                       <td className={`px-4 ${cellPad} font-medium`} style={{ color: COLORS.ink }}>
-                        {t.description}
+                        {applyAccountNicknames(t.description, accountNicknames)}
                         {t.addedAt && lastSyncAt && t.addedAt === lastSyncAt && (
                           <span
                             className="inline-flex items-center justify-center rounded-full ml-1.5"
@@ -1223,7 +1225,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                               </button>
                               {expandedLinks[t.id] && (
                                 <p className="font-body text-xs mt-0.5 pl-4" style={{ color: COLORS.inkSoft }}>
-                                  {linked.date} &middot; {linked.description} &middot; {formatCurrency(linked.amount)}
+                                  {linked.date} &middot; {applyAccountNicknames(linked.description, accountNicknames)} &middot; {formatCurrency(linked.amount)}
                                 </p>
                               )}
                             </div>
@@ -1409,14 +1411,14 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
             </div>
 
             <div className="rounded-xl px-3 py-2 mb-3" style={{ background: COLORS.bg }}>
-              <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{linkTarget.description}</p>
+              <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{applyAccountNicknames(linkTarget.description, accountNicknames)}</p>
               <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{linkTarget.date} &middot; {formatCurrency(linkTarget.amount)}</p>
             </div>
 
             {linkTarget.linkedTransferId && transactionsById[linkTarget.linkedTransferId] && (
               <div className="flex items-center justify-between rounded-xl px-3 py-2 mb-3" style={{ background: COLORS.violetSoft }}>
                 <span className="font-body text-xs" style={{ color: COLORS.violet }}>
-                  Currently linked: {transactionsById[linkTarget.linkedTransferId].description}
+                  Currently linked: {applyAccountNicknames(transactionsById[linkTarget.linkedTransferId].description, accountNicknames)}
                 </span>
                 <GhostButton onClick={unlinkTransfer}>Unlink</GhostButton>
               </div>
@@ -1434,7 +1436,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                   className="w-full flex items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-violet-50"
                   style={{ background: c.id === linkTarget.linkedTransferId ? COLORS.violetSoft : 'transparent' }}
                 >
-                  <span className="font-body text-xs" style={{ color: COLORS.ink }}>{c.date} &middot; {c.description}</span>
+                  <span className="font-body text-xs" style={{ color: COLORS.ink }}>{c.date} &middot; {applyAccountNicknames(c.description, accountNicknames)}</span>
                   <span className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>{formatCurrency(c.amount)}</span>
                 </button>
               ))}
@@ -1456,7 +1458,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
             </div>
 
             <div className="rounded-xl px-3 py-2 mb-4" style={{ background: COLORS.bg }}>
-              <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{splitTarget.description}</p>
+              <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{applyAccountNicknames(splitTarget.description, accountNicknames)}</p>
               <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{splitTarget.date} &middot; Total {formatCurrency(splitTarget.amount)}</p>
             </div>
 
@@ -1540,7 +1542,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
             </div>
 
             <div className="rounded-xl px-3 py-2 mb-4" style={{ background: COLORS.bg }}>
-              <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{allocateTarget.description}</p>
+              <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{applyAccountNicknames(allocateTarget.description, accountNicknames)}</p>
               <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{allocateTarget.date} &middot; Total {formatCurrency(allocateTarget.amount)}</p>
             </div>
 
@@ -1700,7 +1702,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                         </div>
                       </td>
                       <td className="px-2 py-1.5" style={{ color: COLORS.inkSoft }}>{t.date}</td>
-                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{t.description}</td>
+                      <td className="px-2 py-1.5" style={{ color: COLORS.ink }}>{applyAccountNicknames(t.description, accountNicknames)}</td>
                       <td className="px-2 py-1.5 text-right" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
                         {t.type === 'income' ? '+' : '-'}{formatCurrency(t.amount)}
                       </td>

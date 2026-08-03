@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo } from 'react';
-import { Check, X, Palette, Settings2, Trash2, Download, RefreshCw, Loader2, Plus, ChevronDown, ChevronRight, Bold, List, ListOrdered, IndentIncrease, IndentDecrease } from 'lucide-react';
+import { Check, X, Palette, Settings2, Trash2, Download, RefreshCw, Loader2, Plus, ChevronDown, ChevronRight, Bold, List, ListOrdered, IndentIncrease, IndentDecrease, Landmark } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import { categoryColor } from '../lib/categoryColor';
 import { isSavingsAccount, todayStr, uid } from '../lib/helpers';
@@ -164,6 +164,82 @@ function NotesSection({ notes, updateNotes }) {
         </div>
       )}
       </>
+      )}
+    </Card>
+  );
+}
+
+function AccountNicknamesSection({ accountNicknames, updateAccountNicknames }) {
+  const [expanded, setExpanded] = useState(false);
+  const [newCode, setNewCode] = useState('');
+  const [newNickname, setNewNickname] = useState('');
+
+  function addNickname() {
+    if (!newCode.trim() || !newNickname.trim()) return;
+    updateAccountNicknames({ ...accountNicknames, [newCode.trim()]: newNickname.trim() });
+    setNewCode(''); setNewNickname('');
+  }
+
+  function updateNickname(code, nickname) {
+    updateAccountNicknames({ ...accountNicknames, [code]: nickname });
+  }
+
+  function removeNickname(code) {
+    const next = { ...accountNicknames };
+    delete next[code];
+    updateAccountNicknames(next);
+  }
+
+  const entries = Object.entries(accountNicknames).sort((a, b) => a[0].localeCompare(b[0]));
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-2 cursor-pointer" onClick={() => setExpanded((v) => !v)}>
+        <h3 className="font-display font-semibold flex items-center gap-1.5" style={{ color: COLORS.ink }}>
+          {expanded ? <ChevronDown size={16} style={{ color: COLORS.inkSoft }} /> : <ChevronRight size={16} style={{ color: COLORS.inkSoft }} />}
+          Account nicknames {entries.length > 0 && <span style={{ color: COLORS.inkSoft }}>({entries.length})</span>}
+        </h3>
+      </div>
+      {expanded && (
+        <>
+          <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+            Your bank's transfer descriptions sometimes reference a sub-account by an internal code instead of its name (e.g. "Withdrawal Transfer to S0050"). Map codes to names here and the Ledger — and everywhere else transactions show up — will use the friendly name instead.
+          </p>
+          <div className="flex flex-wrap gap-2 items-end mb-3">
+            <div>
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Code</label>
+              <TextInput placeholder="e.g. S0050" value={newCode} onChange={(e) => setNewCode(e.target.value)} style={{ width: 120 }} />
+            </div>
+            <div className="flex-1 min-w-[140px]">
+              <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>Nickname</label>
+              <TextInput placeholder="e.g. Checking" value={newNickname} onChange={(e) => setNewNickname(e.target.value)} />
+            </div>
+            <PrimaryButton onClick={addNickname}><Plus size={14} /> Add</PrimaryButton>
+          </div>
+          {entries.length === 0 ? (
+            <EmptyState icon={Landmark} title="No nicknames yet" subtitle="Add one to make transfer descriptions easier to read." />
+          ) : (
+            <div className="space-y-2">
+              {entries.map(([code, nickname]) => (
+                <div key={code} className="flex items-center gap-2 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                  <span className="font-body text-xs font-semibold px-2 py-1 rounded-lg flex-shrink-0" style={{ background: COLORS.violetSoft, color: COLORS.violet }}>{code}</span>
+                  <span style={{ color: COLORS.inkSoft }}>&rarr;</span>
+                  <input
+                    key={`nickname-${code}`}
+                    defaultValue={nickname}
+                    onBlur={(e) => updateNickname(code, e.target.value.trim() || nickname)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                    className="flex-1 font-body text-sm rounded-lg px-2 py-1 outline-none"
+                    style={{ color: COLORS.ink, border: `1.5px solid ${COLORS.border}`, background: '#fff' }}
+                  />
+                  <button onClick={() => removeNickname(code)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500 flex-shrink-0">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </Card>
   );
@@ -380,7 +456,7 @@ function DataBackupSection({ transactions, migrateLegacyTransactions }) {
   );
 }
 
-export function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory, categoryColors, updateCategoryColors, migrateLegacyTransactions, transferPlans, updateTransferPlans, completeTransferPlan, undoTransferPlan }) {
+export function SettingsView({ bills, updateBills, month, budgets, transactions, goals, hiddenCategories, updateHiddenCategories, notes, updateNotes, accounts, annualAccountId, updateAnnualAccountId, renameCategory, categoryColors, updateCategoryColors, migrateLegacyTransactions, transferPlans, updateTransferPlans, completeTransferPlan, undoTransferPlan, accountNicknames, updateAccountNicknames }) {
   return (
     <div className="space-y-5">
       <div>
@@ -389,6 +465,7 @@ export function SettingsView({ bills, updateBills, month, budgets, transactions,
       </div>
 
       <NotesSection notes={notes} updateNotes={updateNotes} />
+      <AccountNicknamesSection accountNicknames={accountNicknames} updateAccountNicknames={updateAccountNicknames} />
       <CategoriesSection budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} />
       <AnnualAccountSection accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} />
       <BillsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} hiddenCategories={hiddenCategories} />

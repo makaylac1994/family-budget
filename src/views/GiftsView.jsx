@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { Gift, Plus, Check, Trash2, ChevronDown, ChevronRight, Copy, Link2, Unlink, Archive, ArchiveRestore } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { uid, formatCurrency } from '../lib/helpers';
+import { AccountNicknameContext, applyAccountNicknames } from '../lib/accountNicknames';
 import { Card, PrimaryButton, GhostButton, TextInput, EmptyState, JarBar, Select } from '../components/ui';
 
 /* ---------------------------------- Gifts ---------------------------------- */
 
 export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoals, transactions, updateTransactions }) {
+  const accountNicknames = React.useContext(AccountNicknameContext);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: '', date: '' });
   const [expanded, setExpanded] = useState({});
@@ -269,7 +271,7 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoa
                   <div className="mt-1.5 ml-8 space-y-1">
                     {linked.map((p) => (
                       <div key={p.allocationId} className="flex items-center justify-between gap-2">
-                        <p className="font-body text-xs truncate" style={{ color: COLORS.inkSoft }}>{p.description} &middot; {p.date} &middot; {formatCurrency(p.amount)}</p>
+                        <p className="font-body text-xs truncate" style={{ color: COLORS.inkSoft }}>{applyAccountNicknames(p.description, accountNicknames)} &middot; {p.date} &middot; {formatCurrency(p.amount)}</p>
                         <button onClick={() => unlinkPurchase(p.txId, p.allocationId)} title="Unlink this purchase" style={{ color: COLORS.inkSoft }} className="hover:text-red-500 flex-shrink-0">
                           <Unlink size={12} />
                         </button>
@@ -403,7 +405,7 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoa
               return (
                 <div key={key} className="flex flex-wrap items-center gap-2 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
                   <div className="min-w-0 flex-1">
-                    <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{p.description}</p>
+                    <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{applyAccountNicknames(p.description, accountNicknames)}</p>
                     <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{p.date} &middot; {formatCurrency(p.amount)}</p>
                   </div>
                   <Select
