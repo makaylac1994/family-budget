@@ -3,7 +3,7 @@ import Papa from 'papaparse';
 import {
   PiggyBank, Upload, Plus, Trash2, Search, ChevronRight, ChevronDown, ChevronUp,
   TrendingUp, TrendingDown, X, Check, Sparkles, Flame, Scissors, Settings2, Repeat,
-  Receipt, CreditCard, Landmark, ArrowUpDown, Clock, Flag, StickyNote, Layers, Link2,
+  Receipt, CreditCard, Landmark, ArrowUpDown, Clock, Flag, StickyNote, Layers, Link2, Rows3,
 } from 'lucide-react';
 import { COLORS, DEFAULT_EXPENSE_CATEGORIES } from '../lib/constants';
 import {
@@ -100,6 +100,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   const [expandedNotes, setExpandedNotes] = useState({});
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [groupTransfers, setGroupTransfers] = useState(false);
+  const [compactRows, setCompactRows] = useState(false);
   const [expandedRollups, setExpandedRollups] = useState({});
   const [linkTarget, setLinkTarget] = useState(null);
   const [linkSearch, setLinkSearch] = useState('');
@@ -781,6 +782,12 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
         >
           <Layers size={15} /> Group transfers
         </GhostButton>
+        <GhostButton
+          onClick={() => setCompactRows((v) => !v)}
+          style={compactRows ? { background: COLORS.violet, color: '#fff' } : undefined}
+        >
+          <Rows3 size={15} /> Compact
+        </GhostButton>
         <GhostButton onClick={() => setShowCategoryManager(true)}><Settings2 size={15} /> Categories</GhostButton>
         <GhostButton onClick={() => setShowImport(true)}><Upload size={15} /> Import CSV</GhostButton>
         {orphanedTransactions.length > 0 && (
@@ -1036,10 +1043,13 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                   const hasLink = t.linkedTransferId && transactionsById[t.linkedTransferId];
                   const detailsOpen = expandedDetails[t.id] || expandedNotes[t.id];
                   const hasDetails = hasNote || hasAllocation || hasLink || detailsOpen;
+                  const cellPad = compactRows ? 'py-1' : 'py-2.5';
+                  const stackGap = compactRows ? 'mt-0' : 'mt-0.5';
+                  const stackGap1 = compactRows ? 'mt-0.5' : 'mt-1';
                   return (
                   <React.Fragment key={t.id}>
                     <tr className="border-b last:border-0" style={{ borderColor: COLORS.border }}>
-                      <td className="pl-4 pr-1 py-2.5">
+                      <td className={`pl-4 pr-1 ${cellPad}`}>
                         <div
                           onClick={() => toggleSelected(t.id)}
                           className="flex items-center justify-center cursor-pointer"
@@ -1052,7 +1062,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           {selectedIds.has(t.id) && <Check size={10} style={{ color: '#fff' }} strokeWidth={3} />}
                         </div>
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className={`px-4 ${cellPad}`}>
                         <input
                           key={`date-${t.id}`}
                           type="date"
@@ -1068,7 +1078,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           style={{ color: COLORS.inkSoft, border: '1.5px solid transparent', background: 'transparent' }}
                         />
                       </td>
-                      <td className="px-4 py-2.5 font-medium" style={{ color: COLORS.ink }}>
+                      <td className={`px-4 ${cellPad} font-medium`} style={{ color: COLORS.ink }}>
                         {t.description}
                         {t.addedAt && lastSyncAt && t.addedAt === lastSyncAt && (
                           <span
@@ -1097,7 +1107,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                             <Clock size={9} style={{ color: COLORS.inkSoft }} />
                           </span>
                         )}
-                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                        <div className={`flex items-center gap-1.5 ${stackGap} flex-wrap`}>
                           {(() => {
                             const src = paymentSourceFor(t, accountsById);
                             const isCard = src === 'card';
@@ -1128,7 +1138,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           </button>
                         </div>
                         {hasDetails && (
-                          <div className="mt-1">
+                          <div className={stackGap1}>
                             <button
                               onClick={() => setExpandedDetails((p) => ({ ...p, [t.id]: !p[t.id] }))}
                               className="inline-flex items-center gap-1.5 font-body text-xs"
@@ -1224,7 +1234,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           </div>
                         )}
                       </td>
-                      <td className="px-4 py-2.5">
+                      <td className={`px-4 ${cellPad}`}>
                         {t.splits && t.splits.length ? (
                           <button
                             onClick={() => setExpandedSplits((p) => ({ ...p, [t.id]: !p[t.id] }))}
@@ -1238,7 +1248,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           <CategoryEditCell value={t.category} options={categoryOptionsFor(t.category)} bucketGroups={bucketGroups} onChange={(cat) => updateCategoryOrAllocate(t.id, cat)} />
                         )}
                       </td>
-                      <td className="px-4 py-2.5 text-right">
+                      <td className={`px-4 ${cellPad} text-right`}>
                         {t.splits && t.splits.length ? (
                           <span className="font-semibold text-sm inline-flex items-center gap-0.5" style={{ color: t.type === 'income' ? COLORS.teal : COLORS.coral }}>
                             <button
@@ -1255,7 +1265,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           <AmountEditCell value={t.amount} type={t.type} onCommit={(amt) => updateAmount(t.id, amt)} onToggleType={() => updateType(t.id)} />
                         )}
                       </td>
-                      <td className="px-4 py-2.5 text-right">
+                      <td className={`px-4 ${cellPad} text-right`}>
                         <div className="flex items-center justify-end gap-2.5">
                           <button onClick={() => toggleFlag(t.id)} style={{ color: t.flaggedForReview ? COLORS.gold : COLORS.inkSoft }} className="hover:text-amber-600" title={t.flaggedForReview ? 'Flagged for review — click to clear' : 'Flag for your partner to review'}>
                             <Flag size={15} fill={t.flaggedForReview ? COLORS.gold : 'none'} />
