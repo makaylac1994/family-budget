@@ -1072,28 +1072,29 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                         {t.description}
                         {t.addedAt && lastSyncAt && t.addedAt === lastSyncAt && (
                           <span
-                            className="inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-bold font-body ml-1.5"
-                            style={{ background: COLORS.teal, color: '#fff' }}
+                            className="inline-flex items-center justify-center rounded-full ml-1.5"
+                            style={{ width: 16, height: 16, background: COLORS.teal }}
+                            title="New since your last sync"
                           >
-                            New
+                            <Sparkles size={9} style={{ color: '#fff' }} />
                           </span>
                         )}
                         {t.pendingRemoval && (
                           <span
-                            className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs font-bold font-body ml-1.5"
-                            style={{ background: COLORS.gold, color: '#fff' }}
-                            title="Review this in the Accounts tab"
+                            className="inline-flex items-center justify-center rounded-full ml-1.5"
+                            style={{ width: 16, height: 16, background: COLORS.gold }}
+                            title="Needs review — check the Accounts tab"
                           >
-                            <Flame size={9} /> Needs review
+                            <Flame size={9} style={{ color: '#fff' }} />
                           </span>
                         )}
                         {t.pending && (
                           <span
-                            className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs font-bold font-body ml-1.5"
-                            style={{ background: COLORS.border, color: COLORS.inkSoft }}
+                            className="inline-flex items-center justify-center rounded-full ml-1.5"
+                            style={{ width: 16, height: 16, background: COLORS.border }}
                             title="Your bank hasn't fully posted this yet — amount or date may still change"
                           >
-                            <Clock size={9} /> Pending
+                            <Clock size={9} style={{ color: COLORS.inkSoft }} />
                           </span>
                         )}
                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
