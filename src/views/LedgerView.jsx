@@ -1221,7 +1221,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                                 style={{ color: COLORS.teal }}
                               >
                                 {expandedLinks[t.id] ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                                <Link2 size={11} /> Reconciled with bank transfer
+                                <Link2 size={11} /> Linked to matching transfer
                               </button>
                               {expandedLinks[t.id] && (
                                 <p className="font-body text-xs mt-0.5 pl-4" style={{ color: COLORS.inkSoft }}>
@@ -1278,8 +1278,8 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           <button onClick={() => openAllocateModal(t)} style={{ color: t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : COLORS.inkSoft }} className="hover:text-teal-600" title="Choose bucket / allocate to savings">
                             <PiggyBank size={15} fill={t.savingsAllocations && t.savingsAllocations.length ? (isAllocationApplied(t) ? (allocationDirection(t) === 'withdraw' ? COLORS.coral : COLORS.teal) : COLORS.gold) : 'none'} />
                           </button>
-                          {!t.excludeFromTotals && t.savingsAllocations && t.savingsAllocations.length > 0 && (
-                            <button onClick={() => openLinkModal(t)} style={{ color: t.linkedTransferId ? COLORS.teal : COLORS.inkSoft }} className="hover:text-teal-600" title={t.linkedTransferId ? 'Change linked bank transfer' : 'Link to a real bank transfer'}>
+                          {(t.excludeFromTotals || (t.savingsAllocations && t.savingsAllocations.length > 0)) && (
+                            <button onClick={() => openLinkModal(t)} style={{ color: t.linkedTransferId ? COLORS.teal : COLORS.inkSoft }} className="hover:text-teal-600" title={t.linkedTransferId ? 'Change linked transfer' : 'Link to its matching transfer'}>
                               <Link2 size={15} />
                             </button>
                           )}
@@ -1436,7 +1436,10 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                   className="w-full flex items-center justify-between rounded-lg px-2.5 py-2 text-left hover:bg-violet-50"
                   style={{ background: c.id === linkTarget.linkedTransferId ? COLORS.violetSoft : 'transparent' }}
                 >
-                  <span className="font-body text-xs" style={{ color: COLORS.ink }}>{c.date} &middot; {applyAccountNicknames(c.description, accountNicknames)}</span>
+                  <span className="font-body text-xs" style={{ color: COLORS.ink }}>
+                    {c.date} &middot; {applyAccountNicknames(c.description, accountNicknames)}
+                    <span style={{ color: COLORS.violet }}> &middot; {c.category}</span>
+                  </span>
                   <span className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>{formatCurrency(c.amount)}</span>
                 </button>
               ))}
