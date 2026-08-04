@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, Flame, Check, Target, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Flame, Check, Target, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { isSavingsAccount, monthlySavingsNeeded, formatCurrency } from '../lib/helpers';
-import { Card, PrimaryButton, TextInput, EmptyState } from '../components/ui';
+import { Card, PrimaryButton, GhostButton, TextInput, EmptyState } from '../components/ui';
 import { BucketCard, useBucketActions } from './SavingsAnnualShared';
 
 export function SavingsView({ goals, updateGoals, transactions, accounts, annualAccountId, goToLedgerBucket }) {
@@ -22,11 +22,16 @@ export function SavingsView({ goals, updateGoals, transactions, accounts, annual
     });
   }
 
+  function toggleAllCollapsed() {
+    setCollapsedAccounts(allCollapsed ? new Set() : new Set(savingsAccounts.map((a) => a.id)));
+  }
+
   const savingsAccounts = useMemo(
     () => (accounts || []).filter((a) => isSavingsAccount(a) && a.id !== annualAccountId),
     [accounts, annualAccountId]
   );
   const savingsAccountIds = useMemo(() => new Set(savingsAccounts.map((a) => a.id)), [savingsAccounts]);
+  const allCollapsed = savingsAccounts.length > 0 && savingsAccounts.every((a) => collapsedAccounts.has(a.id));
   // Buckets linked to the Annual account live entirely in the Annual tab instead.
   const visibleGoals = useMemo(
     () => goals.filter((g) => !annualAccountId || g.accountId !== annualAccountId),
@@ -69,7 +74,15 @@ export function SavingsView({ goals, updateGoals, transactions, accounts, annual
           <h2 className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>Savings</h2>
           <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>Name your buckets, then allocate money into them &mdash; from here or right from the ledger.</p>
         </div>
-        <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New bucket</PrimaryButton>
+        <div className="flex items-center gap-2">
+          {savingsAccounts.length > 1 && (
+            <GhostButton onClick={toggleAllCollapsed}>
+              {allCollapsed ? <ChevronsUpDown size={15} /> : <ChevronsDownUp size={15} />}
+              {allCollapsed ? 'Expand all' : 'Collapse all'}
+            </GhostButton>
+          )}
+          <PrimaryButton onClick={() => setShowAdd((v) => !v)}><Plus size={15} /> New bucket</PrimaryButton>
+        </div>
       </div>
 
       {hasPending && (
