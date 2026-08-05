@@ -82,6 +82,25 @@ function weekKeyOf(dateStr) {
   return monday.toISOString().slice(0, 10);
 }
 
+// Walks linkedTransferId hop by hop (e.g. a purchase linked to one transfer
+// leg, itself linked to the other leg), guarding against cycles and runaway
+// chains. Returns the linked transactions in order, not including `start`.
+function resolveLinkChain(start, transactionsById, maxDepth = 4) {
+  const chain = [];
+  const visited = new Set([start.id]);
+  let current = start;
+  while (chain.length < maxDepth) {
+    const nextId = current.linkedTransferId;
+    if (!nextId || visited.has(nextId)) break;
+    const next = transactionsById[nextId];
+    if (!next) break;
+    chain.push(next);
+    visited.add(nextId);
+    current = next;
+  }
+  return chain;
+}
+
 export function LedgerView({ transactions, updateTransactions, budgets, month, setMonth, hiddenCategories, updateHiddenCategories, categoryMemory, updateCategoryMemory, goals, updateGoals, accounts, catFilter, setCatFilter, sourceFilter, setSourceFilter, typeFilter, setTypeFilter, lastSyncAt, bucketFilter, setBucketFilter, renameCategory, categoryColors, updateCategoryColors }) {
   const accountNicknames = React.useContext(AccountNicknameContext);
   const [search, setSearch] = useState('');
@@ -491,7 +510,29 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
   }
 
   function linkTransfer(transferId) {
-    updateTransactions(transactions.map((t) => (t.id === linkTarget.id ? { ...t, linkedTransferId: transferId } : t)));
+    const candidate = transactions.find((t) => t.id === transferId);
+    let clearAllocation = false;
+    if (candidate && candidate.savingsAllocations && candidate.savingsAllocations.length) {
+      const bucketNames = candidate.savingsAllocations
+        .map((a) => goals.find((g) => g.id === a.bucketId)?.name)
+        .filter(Boolean);
+      const total = candidate.savingsAllocations.reduce((s, a) => s + a.amount, 0);
+      const label = bucketNames.length ? bucketNames.join(', ') : 'a bucket';
+      clearAllocation = window.confirm(
+        `This transaction also has its own ${formatCurrency(total)} allocation to ${label}. Once linked, it'll be hidden from the Ledger and you won't be able to clear that allocation directly anymore.\n\nClear the allocation now as part of linking? (Cancel keeps it as-is and just links.)`
+      );
+      if (clearAllocation && isAllocationApplied(candidate)) {
+        const oldSign = allocationDirection(candidate) === 'withdraw' ? -1 : 1;
+        applyAllocationDelta(candidate.savingsAllocations, oldSign, [], 1);
+      }
+    }
+    updateTransactions(transactions.map((t) => {
+      if (t.id === linkTarget.id) return { ...t, linkedTransferId: transferId };
+      if (clearAllocation && t.id === transferId) {
+        return { ...t, savingsAllocations: undefined, savingsDirection: undefined, savingsTransferConfirmed: undefined };
+      }
+      return t;
+    }));
     setLinkTarget(null);
   }
 
@@ -1212,7 +1253,8 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                           );
                         })()}
                         {t.linkedTransferId && transactionsById[t.linkedTransferId] && (() => {
-                          const linked = transactionsById[t.linkedTransferId];
+                          const chain = resolveLinkChain(t, transactionsById);
+                          if (chain.length === 0) return null;
                           return (
                             <div className="mt-1">
                               <button
@@ -1224,9 +1266,13 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
                                 <Link2 size={11} /> Linked to matching transfer
                               </button>
                               {expandedLinks[t.id] && (
-                                <p className="font-body text-xs mt-0.5 pl-4" style={{ color: COLORS.inkSoft }}>
-                                  {linked.date} &middot; {applyAccountNicknames(linked.description, accountNicknames)} &middot; {formatCurrency(linked.amount)}
-                                </p>
+                                <div className="mt-0.5 pl-4 space-y-0.5">
+                                  {chain.map((linked) => (
+                                    <p key={linked.id} className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                                      {linked.date} &middot; {applyAccountNicknames(linked.description, accountNicknames)} &middot; {formatCurrency(linked.amount)}
+                                    </p>
+                                  ))}
+                                </div>
                               )}
                             </div>
                           );
