@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Gift, Plus, Check, Trash2, ChevronDown, ChevronRight, Copy, Link2, Unlink, Archive, ArchiveRestore } from 'lucide-react';
+import { Gift, Plus, Check, Trash2, ChevronDown, ChevronRight, Copy, Link2, Unlink, Archive, ArchiveRestore, Scissors, X } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import { uid, formatCurrency } from '../lib/helpers';
 import { AccountNicknameContext, applyAccountNicknames } from '../lib/accountNicknames';
@@ -14,8 +14,11 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoa
   const [expanded, setExpanded] = useState({});
   const [addRecipientFor, setAddRecipientFor] = useState(null);
   const [recipientForm, setRecipientForm] = useState({ name: '', budget: '' });
-  const [assignPicks, setAssignPicks] = useState({});
   const [showArchived, setShowArchived] = useState(false);
+  const [splitTarget, setSplitTarget] = useState(null);
+  const [splitRows, setSplitRows] = useState([]);
+  const [remainderOccasionId, setRemainderOccasionId] = useState('');
+  const [remainderRecipientId, setRemainderRecipientId] = useState('');
 
   const giftsBucket = goals.find((g) => g.name.trim().toLowerCase() === 'gifts');
 
@@ -52,15 +55,69 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoa
       .map((a) => ({ txId: t.id, allocationId: a.id, description: t.description, date: t.date, amount: a.amount })));
   }
 
-  function assignPurchase(txId, allocationId, occasionId, recipientId) {
-    if (!occasionId || !recipientId) return;
-    updateTransactions(transactions.map((t) => (t.id === txId
-      ? { ...t, savingsAllocations: t.savingsAllocations.map((a) => (a.id === allocationId ? { ...a, giftOccasionId: occasionId, giftRecipientId: recipientId } : a)) }
+  function openGiftSplitModal(p) {
+    setSplitTarget(p);
+    setSplitRows([]);
+    setRemainderOccasionId('');
+    setRemainderRecipientId('');
+  }
+
+  function addSplitRow() {
+    setSplitRows((rows) => [...rows, { id: uid(), occasionId: '', recipientId: '', amount: '' }]);
+  }
+
+  function updateSplitRow(id, field, value) {
+    setSplitRows((rows) => rows.map((r) => {
+      if (r.id !== id) return r;
+      // Recipients are scoped to one occasion, so switching occasion clears the stale pick.
+      if (field === 'occasionId') return { ...r, occasionId: value, recipientId: '' };
+      return { ...r, [field]: value };
+    }));
+  }
+
+  function removeSplitRow(id) {
+    setSplitRows((rows) => rows.filter((r) => r.id !== id));
+  }
+
+  function setRemainderOccasion(value) {
+    setRemainderOccasionId(value);
+    setRemainderRecipientId('');
+  }
+
+  const splitExplicitSum = splitRows.reduce((s, r) => s + (Math.abs(parseFloat(r.amount)) || 0), 0);
+  const splitRemaining = splitTarget ? Math.round((splitTarget.amount - splitExplicitSum) * 100) / 100 : 0;
+  const splitRowsIncomplete = splitRows.some((r) => (Math.abs(parseFloat(r.amount)) || 0) > 0 && (!r.occasionId || !r.recipientId));
+  const splitRemainderIncomplete = splitRemaining > 0 && (!remainderOccasionId || !remainderRecipientId);
+  const canSaveSplit = splitRemaining >= 0 && !splitRowsIncomplete && !splitRemainderIncomplete;
+
+  function confirmGiftSplit() {
+    if (!splitTarget || !giftsBucket || !canSaveSplit) return;
+    const explicit = splitRows
+      .filter((r) => (Math.abs(parseFloat(r.amount)) || 0) > 0 && r.occasionId && r.recipientId)
+      .map((r) => ({ occasionId: r.occasionId, recipientId: r.recipientId, amount: Math.abs(parseFloat(r.amount)) || 0 }));
+    const finalEntries = splitRemaining > 0
+      ? [...explicit, { occasionId: remainderOccasionId, recipientId: remainderRecipientId, amount: splitRemaining }]
+      : explicit;
+    if (finalEntries.length === 0) return;
+    const withIds = finalEntries.map((e) => ({
+      id: uid(), bucketId: giftsBucket.id, amount: e.amount,
+      giftOccasionId: e.occasionId, giftRecipientId: e.recipientId,
+    }));
+
+    updateTransactions(transactions.map((t) => (t.id === splitTarget.txId
+      ? { ...t, savingsAllocations: t.savingsAllocations.flatMap((a) => (a.id === splitTarget.allocationId ? withIds : [a])) }
       : t)));
-    updateGiftOccasions(giftOccasions.map((o) => (o.id === occasionId
-      ? { ...o, recipients: o.recipients.map((r) => (r.id === recipientId ? { ...r, purchased: true } : r)) }
+
+    const touchedRecipientsByOccasion = {};
+    finalEntries.forEach(({ occasionId, recipientId }) => {
+      if (!touchedRecipientsByOccasion[occasionId]) touchedRecipientsByOccasion[occasionId] = new Set();
+      touchedRecipientsByOccasion[occasionId].add(recipientId);
+    });
+    updateGiftOccasions(giftOccasions.map((o) => (touchedRecipientsByOccasion[o.id]
+      ? { ...o, recipients: o.recipients.map((r) => (touchedRecipientsByOccasion[o.id].has(r.id) ? { ...r, purchased: true } : r)) }
       : o)));
-    setAssignPicks((p) => { const next = { ...p }; delete next[`${txId}:${allocationId}`]; return next; });
+
+    setSplitTarget(null);
   }
 
   function unlinkPurchase(txId, allocationId) {
@@ -398,45 +455,113 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoa
             Charged to the Gifts bucket in the Ledger — pick who each one was for.
           </p>
           <div className="space-y-2">
-            {unassignedPurchases.map((p) => {
-              const key = `${p.txId}:${p.allocationId}`;
-              const pick = assignPicks[key] || { occasionId: '', recipientId: '' };
-              const pickOccasion = giftOccasions.find((o) => o.id === pick.occasionId);
-              return (
-                <div key={key} className="flex flex-wrap items-center gap-2 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{applyAccountNicknames(p.description, accountNicknames)}</p>
-                    <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{p.date} &middot; {formatCurrency(p.amount)}</p>
-                  </div>
-                  <Select
-                    value={pick.occasionId}
-                    onChange={(e) => setAssignPicks((prev) => ({ ...prev, [key]: { occasionId: e.target.value, recipientId: '' } }))}
-                    style={{ width: 'auto', maxWidth: 160 }}
-                  >
-                    <option value="">Occasion...</option>
-                    {activeOccasions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                  </Select>
-                  <Select
-                    value={pick.recipientId}
-                    onChange={(e) => setAssignPicks((prev) => ({ ...prev, [key]: { ...pick, recipientId: e.target.value } }))}
-                    disabled={!pickOccasion}
-                    style={{ width: 'auto', maxWidth: 140 }}
-                  >
-                    <option value="">Recipient...</option>
-                    {pickOccasion?.recipients.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                  </Select>
-                  <GhostButton
-                    onClick={() => assignPurchase(p.txId, p.allocationId, pick.occasionId, pick.recipientId)}
-                    disabled={!pick.occasionId || !pick.recipientId}
-                  >
-                    <Check size={14} /> Link
-                  </GhostButton>
+            {unassignedPurchases.map((p) => (
+              <div key={`${p.txId}:${p.allocationId}`} className="flex flex-wrap items-center gap-2 rounded-xl px-3 py-2" style={{ background: COLORS.bg }}>
+                <div className="min-w-0 flex-1">
+                  <p className="font-body font-semibold text-sm truncate" style={{ color: COLORS.ink }}>{applyAccountNicknames(p.description, accountNicknames)}</p>
+                  <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{p.date} &middot; {formatCurrency(p.amount)}</p>
                 </div>
-              );
-            })}
+                <GhostButton onClick={() => openGiftSplitModal(p)}>
+                  <Scissors size={14} /> Assign
+                </GhostButton>
+              </div>
+            ))}
           </div>
         </Card>
       )}
+
+      {splitTarget && (() => {
+        const remainderOccasion = activeOccasions.find((o) => o.id === remainderOccasionId);
+        return (
+          <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: 'rgba(33,31,61,0.45)' }}>
+            <Card style={{ maxWidth: 480, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-display font-semibold text-lg" style={{ color: COLORS.ink }}>Assign gift purchase</h3>
+                <button onClick={() => setSplitTarget(null)} style={{ color: COLORS.inkSoft }}><X size={18} /></button>
+              </div>
+
+              <div className="rounded-xl px-3 py-2 mb-4" style={{ background: COLORS.bg }}>
+                <p className="font-body font-semibold text-sm" style={{ color: COLORS.ink }}>{applyAccountNicknames(splitTarget.description, accountNicknames)}</p>
+                <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{splitTarget.date} &middot; Total {formatCurrency(splitTarget.amount)}</p>
+              </div>
+
+              {splitRows.length === 0 && (
+                <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+                  If this purchase covers more than one person, add a split for each. Whatever's left over automatically goes to the pick below.
+                </p>
+              )}
+
+              <div className="space-y-2 mb-2">
+                {splitRows.map((row) => {
+                  const rowOccasion = activeOccasions.find((o) => o.id === row.occasionId);
+                  return (
+                    <div key={row.id} className="flex flex-wrap items-center gap-2">
+                      <Select value={row.occasionId} onChange={(e) => updateSplitRow(row.id, 'occasionId', e.target.value)} style={{ flex: 1, minWidth: 120 }}>
+                        <option value="">Occasion...</option>
+                        {activeOccasions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                      </Select>
+                      <Select
+                        value={row.recipientId}
+                        onChange={(e) => updateSplitRow(row.id, 'recipientId', e.target.value)}
+                        disabled={!rowOccasion}
+                        style={{ flex: 1, minWidth: 110 }}
+                      >
+                        <option value="">Recipient...</option>
+                        {rowOccasion?.recipients.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                      </Select>
+                      <TextInput
+                        type="number" min="0" step="0.01" placeholder="0.00"
+                        value={row.amount} onChange={(e) => updateSplitRow(row.id, 'amount', e.target.value)}
+                        style={{ width: 90 }}
+                      />
+                      <button onClick={() => removeSplitRow(row.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500">
+                        <X size={15} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <button onClick={addSplitRow} className="font-body text-xs font-semibold mb-4" style={{ color: COLORS.violet }}>
+                + Add another recipient
+              </button>
+
+              <div className="flex flex-wrap items-center gap-2 rounded-xl px-3 py-2 mb-1" style={{ background: splitRemaining < 0 ? '#FFE9E9' : COLORS.violetSoft }}>
+                <Select value={remainderOccasionId} onChange={(e) => setRemainderOccasion(e.target.value)} style={{ flex: 1, minWidth: 120 }}>
+                  <option value="">Occasion...</option>
+                  {activeOccasions.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </Select>
+                <Select
+                  value={remainderRecipientId}
+                  onChange={(e) => setRemainderRecipientId(e.target.value)}
+                  disabled={!remainderOccasion}
+                  style={{ flex: 1, minWidth: 110 }}
+                >
+                  <option value="">Recipient...</option>
+                  {remainderOccasion?.recipients.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </Select>
+                <span
+                  className="font-display font-semibold text-sm"
+                  style={{ color: splitRemaining < 0 ? COLORS.coral : COLORS.violet, minWidth: 70, textAlign: 'right' }}
+                >
+                  {formatCurrency(Math.max(splitRemaining, 0))}
+                </span>
+              </div>
+              <p className="font-body text-xs mb-4" style={{ color: splitRemaining < 0 ? COLORS.coral : COLORS.inkSoft }}>
+                {splitRemaining < 0
+                  ? `You've assigned ${formatCurrency(-splitRemaining)} more than the purchase total.`
+                  : 'Remaining amount, auto-calculated from the total above.'}
+              </p>
+
+              <div className="flex justify-end">
+                <PrimaryButton onClick={confirmGiftSplit} disabled={!canSaveSplit}>
+                  <Check size={15} /> Save
+                </PrimaryButton>
+              </div>
+            </Card>
+          </div>
+        );
+      })()}
 
       {showAdd && (
         <Card>
