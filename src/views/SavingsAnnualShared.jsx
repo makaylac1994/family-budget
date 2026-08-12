@@ -74,7 +74,7 @@ export function BucketCard({ g, savingsAccounts, perAccountReconcile, deposit, o
       <div className="flex items-center gap-1">
         <span className="font-display font-bold text-2xl" style={{ color: COLORS.ink }}>$</span>
         <input
-          key={`saved-${g.id}`}
+          key={`saved-${g.id}-${g.saved}`}
           type="number" min="0" step="0.01"
           defaultValue={g.saved}
           onBlur={(e) => {
