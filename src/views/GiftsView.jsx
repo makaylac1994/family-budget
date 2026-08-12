@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Gift, Plus, Check, Trash2, ChevronDown, ChevronRight, Copy, Link2, Unlink, Archive, ArchiveRestore, Scissors, X } from 'lucide-react';
 import { COLORS } from '../lib/constants';
-import { uid, formatCurrency } from '../lib/helpers';
+import { uid, formatCurrency, bucketActivity } from '../lib/helpers';
 import { AccountNicknameContext, applyAccountNicknames } from '../lib/accountNicknames';
 import { Card, PrimaryButton, GhostButton, TextInput, EmptyState, JarBar, Select } from '../components/ui';
 
@@ -19,8 +19,15 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoa
   const [splitRows, setSplitRows] = useState([]);
   const [remainderOccasionId, setRemainderOccasionId] = useState('');
   const [remainderRecipientId, setRemainderRecipientId] = useState('');
+  const [showBucketActivity, setShowBucketActivity] = useState(false);
 
   const giftsBucket = goals.find((g) => g.name.trim().toLowerCase() === 'gifts');
+
+  // Everything that's moved through the Gifts bucket, in both directions --
+  // deposits that fund it show as positive entries alongside the purchase
+  // withdrawals, same feed used by the bucket's own Activity list in
+  // Savings/Annual (bucketActivity, src/lib/helpers.js).
+  const giftsActivity = giftsBucket ? bucketActivity(giftsBucket, transactions) : [];
 
   // Gifts-bucket withdrawals from the Ledger that haven't been tied to a
   // specific recipient yet. Looked up per allocation entry (not per
@@ -443,6 +450,43 @@ export function GiftsView({ giftOccasions, updateGiftOccasions, goals, updateGoa
               Pending: {formatCurrency(giftSpendStats.pending)}
             </span>
           </div>
+        </Card>
+      )}
+
+      {giftsActivity.length > 0 && (
+        <Card>
+          <button
+            onClick={() => setShowBucketActivity((v) => !v)}
+            className="w-full flex items-center justify-between"
+          >
+            <h3 className="font-display font-semibold flex items-center gap-1.5" style={{ color: COLORS.ink }}>
+              {showBucketActivity ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              Gifts bucket activity
+            </h3>
+            <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>{giftsActivity.length} entries</span>
+          </button>
+          {showBucketActivity && (
+            <div className="mt-3 space-y-1.5 max-h-72 overflow-y-auto pr-1">
+              {giftsActivity.map((e) => (
+                <div key={e.id} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5" style={{ background: COLORS.bg }}>
+                  <div className="min-w-0">
+                    <p className="font-body text-xs truncate" style={{ color: COLORS.ink }}>{applyAccountNicknames(e.description, accountNicknames)}</p>
+                    <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                      {e.date}{!e.confirmed && ' · Pending'}
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="font-body text-xs font-semibold" style={{ color: e.amount >= 0 ? COLORS.teal : COLORS.coral }}>
+                      {e.amount >= 0 ? '+' : '-'}{formatCurrency(Math.abs(e.amount))}
+                    </p>
+                    {e.balanceAfter != null && (
+                      <p className="font-body" style={{ color: COLORS.inkSoft, fontSize: 10 }}>{formatCurrency(e.balanceAfter)}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
       )}
 
