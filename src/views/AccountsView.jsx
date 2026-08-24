@@ -63,7 +63,23 @@ function ConnectBankButton({ onConnected }) {
   );
 }
 
-export function AccountsView({ accounts, transactions, updateTransactions }) {
+// A short, human-readable "how long ago" for the persisted lastSyncAt
+// timestamp -- distinct from the ephemeral per-session sync result summary
+// below, which only exists right after this tab triggers a sync itself.
+function formatLastSyncedAt(ms) {
+  if (!ms) return null;
+  const diffMs = Date.now() - ms;
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
+  return new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+export function AccountsView({ accounts, transactions, updateTransactions, lastSyncAt }) {
   const accountNicknames = React.useContext(AccountNicknameContext);
   const [syncing, setSyncing] = useState(false);
   const [disconnectingId, setDisconnectingId] = useState(null);
@@ -168,9 +184,16 @@ export function AccountsView({ accounts, transactions, updateTransactions }) {
             </button>
           )}
           {accounts.length > 0 && (
-            <GhostButton onClick={handleSync}>
-              <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing...' : 'Sync now'}
-            </GhostButton>
+            <>
+              {!syncing && formatLastSyncedAt(lastSyncAt) && (
+                <span className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                  Last synced {formatLastSyncedAt(lastSyncAt)}
+                </span>
+              )}
+              <GhostButton onClick={handleSync}>
+                <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing...' : 'Sync now'}
+              </GhostButton>
+            </>
           )}
           <ConnectBankButton onConnected={handleConnected} />
         </div>
