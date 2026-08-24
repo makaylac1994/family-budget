@@ -227,6 +227,16 @@ export function monthlySavingsNeeded(g) {
   return remaining / monthsRemaining;
 }
 
+// Standard fixed-rate amortization: monthly principal & interest payment for
+// a loan. A 0% rate just splits the principal evenly over the term.
+export function estimateLoanPayment(principal, annualRatePct, termYears) {
+  if (!(principal > 0) || !(termYears > 0)) return 0;
+  const n = termYears * 12;
+  const monthlyRate = (Number(annualRatePct) || 0) / 100 / 12;
+  if (monthlyRate === 0) return principal / n;
+  return (principal * monthlyRate) / (1 - Math.pow(1 + monthlyRate, -n));
+}
+
 export function detectHeaderMap(fields) {
   const map = {};
   fields.forEach((f) => {

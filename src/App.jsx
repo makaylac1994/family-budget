@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from './firebase';
 import { doc, onSnapshot, setDoc, getDoc, getDocs, updateDoc, arrayUnion, collection, writeBatch, deleteField } from 'firebase/firestore';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { Wallet, Receipt, PiggyBank, CalendarClock, Coins, Settings2, Landmark, Loader2, Gift } from 'lucide-react';
+import { Wallet, Receipt, PiggyBank, CalendarClock, Coins, Settings2, Landmark, Loader2, Gift, Calculator } from 'lucide-react';
 import { COLORS } from './lib/constants';
 import { CategoryColorContext } from './lib/categoryColor';
 import { AccountNicknameContext } from './lib/accountNicknames';
@@ -17,6 +17,7 @@ import { SavingsView } from './views/SavingsView';
 import { AnnualView } from './views/AnnualView';
 import { SettingsView } from './views/SettingsView';
 import { GiftsView } from './views/GiftsView';
+import { PlannerView } from './views/PlannerView';
 
 /* ---------------------------------- App ---------------------------------- */
 
@@ -28,6 +29,7 @@ const TABS = [
   { id: 'savings', label: 'Savings', icon: Coins },
   { id: 'annual', label: 'Annual', icon: CalendarClock },
   { id: 'gifts', label: 'Gifts', icon: Gift },
+  { id: 'planner', label: 'Planner', icon: Calculator },
   { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
 
@@ -527,6 +529,9 @@ export default function App() {
             )}
             {tab === 'gifts' && (
               <GiftsView giftOccasions={giftOccasions} updateGiftOccasions={updateGiftOccasions} goals={goals} updateGoals={updateGoals} transactions={transactions} updateTransactions={updateTransactions} />
+            )}
+            {tab === 'planner' && (
+              <PlannerView transactions={transactions} goals={goals} accounts={accounts} />
             )}
             {tab === 'settings' && (
               <SettingsView bills={bills} updateBills={updateBills} month={month} budgets={budgets} transactions={transactions} goals={goals} hiddenCategories={hiddenCategories} updateHiddenCategories={updateHiddenCategories} notes={notes} updateNotes={updateNotes} accounts={accounts} annualAccountId={annualAccountId} updateAnnualAccountId={updateAnnualAccountId} renameCategory={renameCategory} categoryColors={categoryColors} updateCategoryColors={updateCategoryColors} migrateLegacyTransactions={migrateLegacyTransactions} transferPlans={transferPlans} updateTransferPlans={updateTransferPlans} completeTransferPlan={completeTransferPlan} undoTransferPlan={undoTransferPlan} accountNicknames={accountNicknames} updateAccountNicknames={updateAccountNicknames} />
