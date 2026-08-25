@@ -1,9 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { Calculator, Check, Flame, PiggyBank, Wallet, RotateCcw } from 'lucide-react';
+import { Calculator, Check, Flame, PiggyBank, Wallet, RotateCcw, X } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import {
   formatCurrency, nonBucketAmount, isSavingsAccount, currentMonthStr, shiftMonth,
-  monthlyNetSeries, monthlySavingsNeeded, estimateLoanPayment,
+  monthlyNetSeries, monthlySavingsNeeded, estimateLoanPayment, uid,
 } from '../lib/helpers';
 import { Card, TextInput } from '../components/ui';
 
@@ -16,6 +16,7 @@ export function PlannerView({ transactions, goals, accounts }) {
   const [termYears, setTermYears] = useState('');
   const [targetDate, setTargetDate] = useState('');
   const [categoryOverrides, setCategoryOverrides] = useState({});
+  const [extraCosts, setExtraCosts] = useState([]);
 
   const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
 
@@ -92,9 +93,21 @@ export function PlannerView({ transactions, goals, accounts }) {
     ? estimateLoanPayment(loanPrincipal, parseFloat(ratePct) || 0, parseFloat(termYears) || 0)
     : 0;
 
-  const afterPurchaseNet = effectiveNet - loanPayment;
+  function addExtraCost() {
+    setExtraCosts((rows) => [...rows, { id: uid(), label: '', amount: '' }]);
+  }
+  function updateExtraCost(id, field, value) {
+    setExtraCosts((rows) => rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  }
+  function removeExtraCost(id) {
+    setExtraCosts((rows) => rows.filter((r) => r.id !== id));
+  }
+  const extraCostsTotal = extraCosts.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+  const totalMonthlyCost = loanPayment + extraCostsTotal;
+
+  const afterPurchaseNet = effectiveNet - totalMonthlyCost;
   let status = null;
-  if (loanPayment > 0) {
+  if (totalMonthlyCost > 0) {
     if (afterPurchaseNet < 0) status = 'negative';
     else if (avgIncome > 0 && afterPurchaseNet < avgIncome * 0.05) status = 'tight';
     else status = 'comfortable';
@@ -170,7 +183,42 @@ export function PlannerView({ transactions, goals, accounts }) {
           </div>
         </div>
 
-        {(monthlyForDownPayment > 0 || loanPayment > 0) && (
+        <div className="mt-4">
+          <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>
+            Extra monthly costs (optional)
+          </label>
+          <p className="font-body text-xs mb-2" style={{ color: COLORS.inkSoft }}>
+            Property tax, homeowners insurance, PMI, HOA dues, registration &mdash; anything on top of the loan payment.
+          </p>
+          {extraCosts.length > 0 && (
+            <div className="space-y-2 mb-2">
+              {extraCosts.map((row) => (
+                <div key={row.id} className="flex items-center gap-2">
+                  <TextInput
+                    placeholder="e.g. Property tax"
+                    value={row.label}
+                    onChange={(e) => updateExtraCost(row.id, 'label', e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <TextInput
+                    type="number" min="0" step="0.01" placeholder="0.00"
+                    value={row.amount}
+                    onChange={(e) => updateExtraCost(row.id, 'amount', e.target.value)}
+                    style={{ width: 100 }}
+                  />
+                  <button onClick={() => removeExtraCost(row.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500">
+                    <X size={15} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <button onClick={addExtraCost} className="font-body text-xs font-semibold" style={{ color: COLORS.violet }}>
+            + Add another cost
+          </button>
+        </div>
+
+        {(monthlyForDownPayment > 0 || totalMonthlyCost > 0) && (
           <div className="mt-5 space-y-3">
             {monthlyForDownPayment > 0 && (
               <div className="rounded-xl px-4 py-3" style={{ background: COLORS.violetSoft }}>
@@ -184,14 +232,19 @@ export function PlannerView({ transactions, goals, accounts }) {
                 </p>
               </div>
             )}
-            {loanPayment > 0 && (
+            {totalMonthlyCost > 0 && (
               <div className="rounded-xl px-4 py-3" style={{ background: `${statusColor}18` }}>
                 <div className="flex items-center gap-2 mb-0.5">
                   <Wallet size={15} style={{ color: statusColor }} />
                   <span className="font-body text-xs font-semibold uppercase tracking-wide" style={{ color: statusColor }}>After you buy</span>
                 </div>
-                <p className="font-display font-bold text-lg" style={{ color: COLORS.ink }}>{formatCurrency(loanPayment)}/mo loan payment</p>
-                <p className="font-body text-xs flex items-center gap-1" style={{ color: COLORS.inkSoft }}>
+                <p className="font-display font-bold text-lg" style={{ color: COLORS.ink }}>{formatCurrency(totalMonthlyCost)}/mo total</p>
+                {extraCostsTotal > 0 && (
+                  <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                    {formatCurrency(loanPayment)}/mo loan payment + {formatCurrency(extraCostsTotal)}/mo extra costs
+                  </p>
+                )}
+                <p className="font-body text-xs flex items-center gap-1 mt-1" style={{ color: COLORS.inkSoft }}>
                   Leaves {formatCurrency(afterPurchaseNet)}/mo of your {hasAdjustments ? 'adjusted' : 'average'} {formatCurrency(effectiveNet)}/mo net.
                   {hasAdjustments && ` (real average: ${formatCurrency(avgNet)}/mo)`}
                 </p>
