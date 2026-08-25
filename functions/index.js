@@ -84,12 +84,25 @@ function primaryCategory(plaidTx) {
   return plaidTx.personal_finance_category?.primary || (plaidTx.category && plaidTx.category[0]) || '';
 }
 
+function detailedCategory(plaidTx) {
+  return plaidTx.personal_finance_category?.detailed || '';
+}
+
 // Internal money movements (savings <-> checking, credit card payments) should
 // default to excluded from income/expense totals, since they're not new
 // earnings or new spending — just money moving between your own accounts.
 // The user can still flip this back off by hand in the ledger if needed.
-function isTransferCategory(primary) {
-  return primary === 'TRANSFER_IN' || primary === 'TRANSFER_OUT' || primary === 'LOAN_PAYMENTS';
+//
+// Plaid files every kind of loan payment (mortgage, auto, personal, student,
+// AND credit card) under the same LOAN_PAYMENTS primary category. Only the
+// credit card payment is actually an internal transfer here -- the original
+// purchases were already counted as spending, so paying off the card would
+// double-count them. A mortgage or auto payment has no matching "purchase"
+// transaction elsewhere in the ledger; it's real recurring spending and
+// should count, so only the credit-card-payment subtype gets excluded.
+function isTransferCategory(primary, detailed) {
+  if (primary === 'TRANSFER_IN' || primary === 'TRANSFER_OUT') return true;
+  return primary === 'LOAN_PAYMENTS' && detailed === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT';
 }
 
 
@@ -170,6 +183,7 @@ async function syncHouseholdInternal(householdId) {
       resp.data.added.forEach((tx) => {
         addedCount++;
         const primary = primaryCategory(tx);
+        const detailed = detailedCategory(tx);
         txUpdates.set(tx.transaction_id, {
           id: `plaid:${tx.transaction_id}`,
           plaidTransactionId: tx.transaction_id,
@@ -182,7 +196,7 @@ async function syncHouseholdInternal(householdId) {
           // negative = money coming in (income/refund).
           type: tx.amount > 0 ? 'expense' : 'income',
           source: 'plaid',
-          excludeFromTotals: isTransferCategory(primary) ? true : undefined,
+          excludeFromTotals: isTransferCategory(primary, detailed) ? true : undefined,
           pending: tx.pending,
           pendingTransactionId: tx.pending_transaction_id || undefined,
           addedAt: syncStartedAt,
@@ -191,6 +205,7 @@ async function syncHouseholdInternal(householdId) {
       resp.data.modified.forEach((tx) => {
         modifiedCount++;
         const primary = primaryCategory(tx);
+        const detailed = detailedCategory(tx);
         txUpdates.set(tx.transaction_id, {
           id: `plaid:${tx.transaction_id}`,
           plaidTransactionId: tx.transaction_id,
@@ -201,7 +216,7 @@ async function syncHouseholdInternal(householdId) {
           amount: Math.abs(tx.amount),
           type: tx.amount > 0 ? 'expense' : 'income',
           source: 'plaid',
-          excludeFromTotals: isTransferCategory(primary) ? true : undefined,
+          excludeFromTotals: isTransferCategory(primary, detailed) ? true : undefined,
           pending: tx.pending,
           pendingTransactionId: tx.pending_transaction_id || undefined,
         });
