@@ -17,6 +17,8 @@ export function PlannerView({ transactions, goals, accounts }) {
   const [targetDate, setTargetDate] = useState('');
   const [categoryOverrides, setCategoryOverrides] = useState({});
   const [extraCosts, setExtraCosts] = useState([]);
+  const [currentSpend, setCurrentSpend] = useState('');
+  const [extraIncome, setExtraIncome] = useState([]);
 
   const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
 
@@ -75,11 +77,27 @@ export function PlannerView({ transactions, goals, accounts }) {
       return next;
     });
   }
-  const hasAdjustments = Object.keys(categoryOverrides).length > 0;
+  function addExtraIncome() {
+    setExtraIncome((rows) => [...rows, { id: uid(), label: '', amount: '' }]);
+  }
+  function updateExtraIncome(id, field, value) {
+    setExtraIncome((rows) => rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  }
+  function removeExtraIncome(id) {
+    setExtraIncome((rows) => rows.filter((r) => r.id !== id));
+  }
+  function resetPlaygroundAdjustments() {
+    setCategoryOverrides({});
+    setExtraIncome([]);
+  }
+
+  const hasAdjustments = Object.keys(categoryOverrides).length > 0 || extraIncome.length > 0;
   const adjustedExpenseTotal = categoryAverages.reduce((s, c) => s + overrideAmount(c), 0);
-  const roomFreed = avgExpense - adjustedExpenseTotal;
-  const adjustedNet = avgNet + roomFreed;
+  const extraIncomeTotal = extraIncome.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+  const adjustedIncome = avgIncome + extraIncomeTotal;
+  const adjustedNet = adjustedIncome - adjustedExpenseTotal;
   const effectiveNet = hasAdjustments ? adjustedNet : avgNet;
+  const netChange = adjustedNet - avgNet;
 
   const priceNum = parseFloat(price) || 0;
   const downPaymentNum = parseFloat(downPayment) || 0;
@@ -104,8 +122,10 @@ export function PlannerView({ transactions, goals, accounts }) {
   }
   const extraCostsTotal = extraCosts.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
   const totalMonthlyCost = loanPayment + extraCostsTotal;
+  const currentSpendNum = parseFloat(currentSpend) || 0;
+  const netNewCost = totalMonthlyCost - currentSpendNum;
 
-  const afterPurchaseNet = effectiveNet - totalMonthlyCost;
+  const afterPurchaseNet = effectiveNet - netNewCost;
   let status = null;
   if (totalMonthlyCost > 0) {
     if (afterPurchaseNet < 0) status = 'negative';
@@ -218,6 +238,20 @@ export function PlannerView({ transactions, goals, accounts }) {
           </button>
         </div>
 
+        <div className="mt-4">
+          <label className="font-body text-xs font-semibold" style={{ color: COLORS.inkSoft }}>
+            Currently spending on this ($, optional)
+          </label>
+          <p className="font-body text-xs mb-2" style={{ color: COLORS.inkSoft }}>
+            What you already pay for what this replaces &mdash; rent, an existing car payment. Leave blank if this is new spending, not a replacement.
+          </p>
+          <TextInput
+            type="number" min="0" placeholder="e.g. 1200"
+            value={currentSpend} onChange={(e) => setCurrentSpend(e.target.value)}
+            style={{ maxWidth: 160 }}
+          />
+        </div>
+
         {(monthlyForDownPayment > 0 || totalMonthlyCost > 0) && (
           <div className="mt-5 space-y-3">
             {monthlyForDownPayment > 0 && (
@@ -244,6 +278,11 @@ export function PlannerView({ transactions, goals, accounts }) {
                     {formatCurrency(loanPayment)}/mo loan payment + {formatCurrency(extraCostsTotal)}/mo extra costs
                   </p>
                 )}
+                {currentSpendNum > 0 && (
+                  <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                    &minus; {formatCurrency(currentSpendNum)}/mo already spent on this = <strong style={{ color: COLORS.ink }}>{formatCurrency(netNewCost)}/mo net new cost</strong>
+                  </p>
+                )}
                 <p className="font-body text-xs flex items-center gap-1 mt-1" style={{ color: COLORS.inkSoft }}>
                   Leaves {formatCurrency(afterPurchaseNet)}/mo of your {hasAdjustments ? 'adjusted' : 'average'} {formatCurrency(effectiveNet)}/mo net.
                   {hasAdjustments && ` (real average: ${formatCurrency(avgNet)}/mo)`}
@@ -253,7 +292,7 @@ export function PlannerView({ transactions, goals, accounts }) {
                 </p>
                 {status !== 'comfortable' && !hasAdjustments && (
                   <p className="font-body text-xs mt-1" style={{ color: COLORS.inkSoft }}>
-                    Try adjusting categories below to see if trimming makes this fit.
+                    Try trimming spending or adding income below to see if it fits.
                   </p>
                 )}
               </div>
@@ -262,71 +301,102 @@ export function PlannerView({ transactions, goals, accounts }) {
         )}
       </Card>
 
-      {categoryAverages.length > 0 && (
-        <Card>
-          <div className="flex items-center justify-between mb-1">
-            <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Where the room is</h3>
-            {hasAdjustments && (
-              <button
-                onClick={() => setCategoryOverrides({})}
-                className="font-body text-xs font-semibold flex items-center gap-1"
-                style={{ color: COLORS.violet }}
-              >
-                <RotateCcw size={12} /> Reset all
-              </button>
-            )}
-          </div>
-          <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
-            Average monthly spend by category, last 6 months &mdash; edit any amount to play out a cut and see the effect above.
-          </p>
-
+      <Card>
+        <div className="flex items-center justify-between mb-1">
+          <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Where the room is</h3>
           {hasAdjustments && (
-            <div className="rounded-xl px-3 py-2 mb-3" style={{ background: `${roomFreed >= 0 ? COLORS.teal : COLORS.coral}18` }}>
-              <p className="font-body text-xs font-semibold" style={{ color: roomFreed >= 0 ? COLORS.teal : COLORS.coral }}>
-                {roomFreed >= 0
-                  ? `${formatCurrency(roomFreed)}/mo freed up`
-                  : `${formatCurrency(-roomFreed)}/mo more than your real average`}
-              </p>
-              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
-                Adjusted total {formatCurrency(adjustedExpenseTotal)}/mo vs. real {formatCurrency(avgExpense)}/mo.
-              </p>
-            </div>
+            <button
+              onClick={resetPlaygroundAdjustments}
+              className="font-body text-xs font-semibold flex items-center gap-1"
+              style={{ color: COLORS.violet }}
+            >
+              <RotateCcw size={12} /> Reset all
+            </button>
           )}
+        </div>
+        <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
+          Add income or trim spending &mdash; last 6 months of real activity &mdash; to see the effect above.
+        </p>
 
-          <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1">
-            {categoryAverages.map((c) => {
-              const isOverridden = categoryOverrides[c.category] !== undefined;
-              const delta = overrideAmount(c) - c.avgPerMonth;
-              return (
-                <div key={c.category} className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5" style={{ background: COLORS.bg }}>
-                  <div className="min-w-0">
-                    <span className="font-body text-sm" style={{ color: COLORS.ink }}>{c.category}</span>
-                    {isOverridden && Math.abs(delta) > 0.005 && (
-                      <span className="font-body text-xs ml-1.5" style={{ color: delta < 0 ? COLORS.teal : COLORS.coral }}>
-                        ({delta < 0 ? '-' : '+'}{formatCurrency(Math.abs(delta))})
-                      </span>
-                    )}
-                    <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>real {formatCurrency(c.avgPerMonth)}/mo</p>
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <TextInput
-                      type="number" min="0" step="0.01"
-                      value={categoryOverrides[c.category] ?? String(Math.round(c.avgPerMonth * 100) / 100)}
-                      onChange={(e) => updateCategoryOverride(c.category, e.target.value)}
-                      style={{ width: 90, textAlign: 'right' }}
-                    />
-                    {isOverridden && (
-                      <button onClick={() => resetCategoryOverride(c.category)} title="Reset to real average" style={{ color: COLORS.inkSoft }} className="hover:text-violet-600">
-                        <RotateCcw size={13} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+        {hasAdjustments && (
+          <div className="rounded-xl px-3 py-2 mb-4" style={{ background: `${netChange >= 0 ? COLORS.teal : COLORS.coral}18` }}>
+            <p className="font-body text-xs font-semibold" style={{ color: netChange >= 0 ? COLORS.teal : COLORS.coral }}>
+              {netChange >= 0 ? `${formatCurrency(netChange)}/mo more room` : `${formatCurrency(-netChange)}/mo less room`}
+            </p>
+            <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+              Adjusted net {formatCurrency(adjustedNet)}/mo vs. real {formatCurrency(avgNet)}/mo.
+            </p>
           </div>
-        </Card>
-      )}
+        )}
+
+        <h4 className="font-body text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: COLORS.inkSoft }}>Income</h4>
+        <div className="space-y-1.5 mb-2">
+          <div className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5" style={{ background: COLORS.bg }}>
+            <span className="font-body text-sm" style={{ color: COLORS.ink }}>Average income</span>
+            <span className="font-body text-sm font-semibold" style={{ color: COLORS.teal }}>{formatCurrency(avgIncome)}/mo</span>
+          </div>
+          {extraIncome.map((row) => (
+            <div key={row.id} className="flex items-center gap-2">
+              <TextInput
+                placeholder="e.g. New job"
+                value={row.label}
+                onChange={(e) => updateExtraIncome(row.id, 'label', e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <TextInput
+                type="number" min="0" step="0.01" placeholder="0.00"
+                value={row.amount}
+                onChange={(e) => updateExtraIncome(row.id, 'amount', e.target.value)}
+                style={{ width: 100 }}
+              />
+              <button onClick={() => removeExtraIncome(row.id)} style={{ color: COLORS.inkSoft }} className="hover:text-red-500">
+                <X size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button onClick={addExtraIncome} className="font-body text-xs font-semibold mb-4" style={{ color: COLORS.violet }}>
+          + Add income source
+        </button>
+
+        {categoryAverages.length > 0 && (
+          <>
+            <h4 className="font-body text-xs font-semibold uppercase tracking-wide mb-2" style={{ color: COLORS.inkSoft }}>Expenses</h4>
+            <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1">
+              {categoryAverages.map((c) => {
+                const isOverridden = categoryOverrides[c.category] !== undefined;
+                const delta = overrideAmount(c) - c.avgPerMonth;
+                return (
+                  <div key={c.category} className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5" style={{ background: COLORS.bg }}>
+                    <div className="min-w-0">
+                      <span className="font-body text-sm" style={{ color: COLORS.ink }}>{c.category}</span>
+                      {isOverridden && Math.abs(delta) > 0.005 && (
+                        <span className="font-body text-xs ml-1.5" style={{ color: delta < 0 ? COLORS.teal : COLORS.coral }}>
+                          ({delta < 0 ? '-' : '+'}{formatCurrency(Math.abs(delta))})
+                        </span>
+                      )}
+                      <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>real {formatCurrency(c.avgPerMonth)}/mo</p>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <TextInput
+                        type="number" min="0" step="0.01"
+                        value={categoryOverrides[c.category] ?? String(Math.round(c.avgPerMonth * 100) / 100)}
+                        onChange={(e) => updateCategoryOverride(c.category, e.target.value)}
+                        style={{ width: 90, textAlign: 'right' }}
+                      />
+                      {isOverridden && (
+                        <button onClick={() => resetCategoryOverride(c.category)} title="Reset to real average" style={{ color: COLORS.inkSoft }} className="hover:text-violet-600">
+                          <RotateCcw size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </Card>
     </div>
   );
 }
