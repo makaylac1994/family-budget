@@ -1,24 +1,60 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Calculator, Check, Flame, PiggyBank, Wallet, RotateCcw, X } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import {
   formatCurrency, nonBucketAmount, isSavingsAccount, currentMonthStr, shiftMonth,
   monthlyNetSeries, monthlySavingsNeeded, estimateLoanPayment, uid,
 } from '../lib/helpers';
-import { Card, TextInput } from '../components/ui';
+import { Card, TextInput, GhostButton } from '../components/ui';
 
 /* ---------------------------------- Planner ---------------------------------- */
 
+// Scratch scenario is saved to this browser only (localStorage) -- never synced
+// to Firestore/household, so it's private to whoever is using this device.
+const STORAGE_KEY = 'planner-scenario-v1';
+
+function loadSavedScenario() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 export function PlannerView({ transactions, goals, accounts }) {
-  const [price, setPrice] = useState('');
-  const [downPayment, setDownPayment] = useState('');
-  const [ratePct, setRatePct] = useState('');
-  const [termYears, setTermYears] = useState('');
-  const [targetDate, setTargetDate] = useState('');
-  const [categoryOverrides, setCategoryOverrides] = useState({});
-  const [extraCosts, setExtraCosts] = useState([]);
-  const [currentSpend, setCurrentSpend] = useState('');
-  const [extraIncome, setExtraIncome] = useState([]);
+  const [saved] = useState(loadSavedScenario);
+  const [price, setPrice] = useState(saved.price ?? '');
+  const [downPayment, setDownPayment] = useState(saved.downPayment ?? '');
+  const [ratePct, setRatePct] = useState(saved.ratePct ?? '');
+  const [termYears, setTermYears] = useState(saved.termYears ?? '');
+  const [targetDate, setTargetDate] = useState(saved.targetDate ?? '');
+  const [categoryOverrides, setCategoryOverrides] = useState(saved.categoryOverrides ?? {});
+  const [extraCosts, setExtraCosts] = useState(saved.extraCosts ?? []);
+  const [currentSpend, setCurrentSpend] = useState(saved.currentSpend ?? '');
+  const [extraIncome, setExtraIncome] = useState(saved.extraIncome ?? []);
+
+  useEffect(() => {
+    const scenario = {
+      price, downPayment, ratePct, termYears, targetDate,
+      categoryOverrides, extraCosts, currentSpend, extraIncome,
+    };
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(scenario));
+    } catch {
+      // Private browsing / storage full -- scenario just won't persist.
+    }
+  }, [price, downPayment, ratePct, termYears, targetDate, categoryOverrides, extraCosts, currentSpend, extraIncome]);
+
+  function clearScenario() {
+    setPrice(''); setDownPayment(''); setRatePct(''); setTermYears(''); setTargetDate('');
+    setCategoryOverrides({}); setExtraCosts([]); setCurrentSpend(''); setExtraIncome([]);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
 
   const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
 
@@ -141,13 +177,18 @@ export function PlannerView({ transactions, goals, accounts }) {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="font-display font-bold text-2xl flex items-center gap-2" style={{ color: COLORS.ink }}>
-          <Calculator size={22} style={{ color: COLORS.violet }} /> Planner
-        </h2>
-        <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>
-          Model a big purchase against your real numbers &mdash; nothing here is saved.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-2xl flex items-center gap-2" style={{ color: COLORS.ink }}>
+            <Calculator size={22} style={{ color: COLORS.violet }} /> Planner
+          </h2>
+          <p className="font-body text-sm" style={{ color: COLORS.inkSoft }}>
+            Model a big purchase against your real numbers &mdash; saved on this device only, not synced to Dakoda.
+          </p>
+        </div>
+        <GhostButton onClick={clearScenario} style={{ flexShrink: 0 }}>
+          <X size={14} /> Clear scenario
+        </GhostButton>
       </div>
 
       <Card>
