@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Calculator, Check, Flame, PiggyBank, Wallet } from 'lucide-react';
+import { Calculator, Check, Flame, PiggyBank, Wallet, RotateCcw } from 'lucide-react';
 import { COLORS } from '../lib/constants';
 import {
   formatCurrency, nonBucketAmount, isSavingsAccount, currentMonthStr, shiftMonth,
@@ -15,6 +15,7 @@ export function PlannerView({ transactions, goals, accounts }) {
   const [ratePct, setRatePct] = useState('');
   const [termYears, setTermYears] = useState('');
   const [targetDate, setTargetDate] = useState('');
+  const [categoryOverrides, setCategoryOverrides] = useState({});
 
   const bucketNameSet = useMemo(() => new Set(goals.map((g) => g.name)), [goals]);
 
@@ -57,6 +58,28 @@ export function PlannerView({ transactions, goals, accounts }) {
       .sort((a, b) => b.avgPerMonth - a.avgPerMonth);
   }, [transactions, trendMonths, bucketNameSet]);
 
+  // Editable "what if I spent less here" amounts, scratch state only --
+  // defaults to the real average until she types over it.
+  function overrideAmount(c) {
+    const raw = categoryOverrides[c.category];
+    return raw !== undefined ? (parseFloat(raw) || 0) : c.avgPerMonth;
+  }
+  function updateCategoryOverride(category, value) {
+    setCategoryOverrides((prev) => ({ ...prev, [category]: value }));
+  }
+  function resetCategoryOverride(category) {
+    setCategoryOverrides((prev) => {
+      const next = { ...prev };
+      delete next[category];
+      return next;
+    });
+  }
+  const hasAdjustments = Object.keys(categoryOverrides).length > 0;
+  const adjustedExpenseTotal = categoryAverages.reduce((s, c) => s + overrideAmount(c), 0);
+  const roomFreed = avgExpense - adjustedExpenseTotal;
+  const adjustedNet = avgNet + roomFreed;
+  const effectiveNet = hasAdjustments ? adjustedNet : avgNet;
+
   const priceNum = parseFloat(price) || 0;
   const downPaymentNum = parseFloat(downPayment) || 0;
   const downPaymentPctOfPrice = priceNum > 0 && downPaymentNum > 0 ? (downPaymentNum / priceNum) * 100 : null;
@@ -69,7 +92,7 @@ export function PlannerView({ transactions, goals, accounts }) {
     ? estimateLoanPayment(loanPrincipal, parseFloat(ratePct) || 0, parseFloat(termYears) || 0)
     : 0;
 
-  const afterPurchaseNet = avgNet - loanPayment;
+  const afterPurchaseNet = effectiveNet - loanPayment;
   let status = null;
   if (loanPayment > 0) {
     if (afterPurchaseNet < 0) status = 'negative';
@@ -169,11 +192,17 @@ export function PlannerView({ transactions, goals, accounts }) {
                 </div>
                 <p className="font-display font-bold text-lg" style={{ color: COLORS.ink }}>{formatCurrency(loanPayment)}/mo loan payment</p>
                 <p className="font-body text-xs flex items-center gap-1" style={{ color: COLORS.inkSoft }}>
-                  Leaves {formatCurrency(afterPurchaseNet)}/mo of your average {formatCurrency(avgNet)}/mo net.
+                  Leaves {formatCurrency(afterPurchaseNet)}/mo of your {hasAdjustments ? 'adjusted' : 'average'} {formatCurrency(effectiveNet)}/mo net.
+                  {hasAdjustments && ` (real average: ${formatCurrency(avgNet)}/mo)`}
                 </p>
                 <p className="font-body text-xs font-semibold mt-1 flex items-center gap-1" style={{ color: statusColor }}>
                   {status === 'comfortable' ? <Check size={13} /> : <Flame size={13} />} {statusLabel}
                 </p>
+                {status !== 'comfortable' && !hasAdjustments && (
+                  <p className="font-body text-xs mt-1" style={{ color: COLORS.inkSoft }}>
+                    Try adjusting categories below to see if trimming makes this fit.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -182,17 +211,66 @@ export function PlannerView({ transactions, goals, accounts }) {
 
       {categoryAverages.length > 0 && (
         <Card>
-          <h3 className="font-display font-semibold mb-1" style={{ color: COLORS.ink }}>Where the room is</h3>
+          <div className="flex items-center justify-between mb-1">
+            <h3 className="font-display font-semibold" style={{ color: COLORS.ink }}>Where the room is</h3>
+            {hasAdjustments && (
+              <button
+                onClick={() => setCategoryOverrides({})}
+                className="font-body text-xs font-semibold flex items-center gap-1"
+                style={{ color: COLORS.violet }}
+              >
+                <RotateCcw size={12} /> Reset all
+              </button>
+            )}
+          </div>
           <p className="font-body text-xs mb-3" style={{ color: COLORS.inkSoft }}>
-            Average monthly spend by category, last 6 months &mdash; the biggest levers if something doesn't fit above.
+            Average monthly spend by category, last 6 months &mdash; edit any amount to play out a cut and see the effect above.
           </p>
+
+          {hasAdjustments && (
+            <div className="rounded-xl px-3 py-2 mb-3" style={{ background: `${roomFreed >= 0 ? COLORS.teal : COLORS.coral}18` }}>
+              <p className="font-body text-xs font-semibold" style={{ color: roomFreed >= 0 ? COLORS.teal : COLORS.coral }}>
+                {roomFreed >= 0
+                  ? `${formatCurrency(roomFreed)}/mo freed up`
+                  : `${formatCurrency(-roomFreed)}/mo more than your real average`}
+              </p>
+              <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
+                Adjusted total {formatCurrency(adjustedExpenseTotal)}/mo vs. real {formatCurrency(avgExpense)}/mo.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1">
-            {categoryAverages.map((c) => (
-              <div key={c.category} className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5" style={{ background: COLORS.bg }}>
-                <span className="font-body text-sm" style={{ color: COLORS.ink }}>{c.category}</span>
-                <span className="font-body text-sm font-semibold" style={{ color: COLORS.inkSoft }}>{formatCurrency(c.avgPerMonth)}/mo</span>
-              </div>
-            ))}
+            {categoryAverages.map((c) => {
+              const isOverridden = categoryOverrides[c.category] !== undefined;
+              const delta = overrideAmount(c) - c.avgPerMonth;
+              return (
+                <div key={c.category} className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5" style={{ background: COLORS.bg }}>
+                  <div className="min-w-0">
+                    <span className="font-body text-sm" style={{ color: COLORS.ink }}>{c.category}</span>
+                    {isOverridden && Math.abs(delta) > 0.005 && (
+                      <span className="font-body text-xs ml-1.5" style={{ color: delta < 0 ? COLORS.teal : COLORS.coral }}>
+                        ({delta < 0 ? '-' : '+'}{formatCurrency(Math.abs(delta))})
+                      </span>
+                    )}
+                    <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>real {formatCurrency(c.avgPerMonth)}/mo</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <TextInput
+                      type="number" min="0" step="0.01"
+                      value={categoryOverrides[c.category] ?? String(Math.round(c.avgPerMonth * 100) / 100)}
+                      onChange={(e) => updateCategoryOverride(c.category, e.target.value)}
+                      style={{ width: 90, textAlign: 'right' }}
+                    />
+                    {isOverridden && (
+                      <button onClick={() => resetCategoryOverride(c.category)} title="Reset to real average" style={{ color: COLORS.inkSoft }} className="hover:text-violet-600">
+                        <RotateCcw size={13} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </Card>
       )}
