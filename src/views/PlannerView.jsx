@@ -365,7 +365,7 @@ export function PlannerView({ transactions, goals, accounts }) {
               {netChange >= 0 ? `${formatCurrency(netChange)}/mo more room` : `${formatCurrency(-netChange)}/mo less room`}
             </p>
             <p className="font-body text-xs" style={{ color: COLORS.inkSoft }}>
-              Adjusted net {formatCurrency(adjustedNet)}/mo vs. real {formatCurrency(avgNet)}/mo.
+              {formatCurrency(adjustedIncome)}/mo income &minus; {formatCurrency(adjustedExpenseTotal)}/mo expenses = {formatCurrency(adjustedNet)}/mo net (real {formatCurrency(avgNet)}/mo).
             </p>
           </div>
         )}
