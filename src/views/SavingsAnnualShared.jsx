@@ -224,7 +224,7 @@ export function useBucketActions(goals, updateGoals, { defaultAccountId } = {}) 
     const amt = parseFloat(deposits[id]);
     if (!amt) return;
     updateGoals(goals.map((g) => (g.id === id
-      ? { ...g, saved: g.saved + amt, savedHistory: [...(g.savedHistory || []), { id: uid(), date: todayStr(), delta: amt, type: 'manual' }] }
+      ? { ...g, saved: Math.round((g.saved + amt) * 100) / 100, savedHistory: [...(g.savedHistory || []), { id: uid(), date: todayStr(), delta: amt, type: 'manual' }] }
       : g)));
     setDeposit(id, '');
   }
@@ -239,7 +239,7 @@ export function useBucketActions(goals, updateGoals, { defaultAccountId } = {}) 
   }
 
   function updateSavedAmount(id, val) {
-    const v = Math.max(0, parseFloat(val) || 0);
+    const v = Math.max(0, Math.round((parseFloat(val) || 0) * 100) / 100);
     updateGoals(goals.map((g) => {
       if (g.id !== id) return g;
       const delta = v - g.saved;

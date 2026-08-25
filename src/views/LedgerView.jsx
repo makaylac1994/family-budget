@@ -658,7 +658,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
     updateGoals(goals.map((g) => {
       if (!touched.has(g.id)) return g;
       const delta = newSign * (newByBucket[g.id] || 0) - oldSign * (oldByBucket[g.id] || 0);
-      return { ...g, saved: Math.max(0, g.saved + delta) };
+      return { ...g, saved: Math.max(0, Math.round((g.saved + delta) * 100) / 100) };
     }));
   }
 
@@ -673,7 +673,7 @@ export function LedgerView({ transactions, updateTransactions, budgets, month, s
     });
     if (Object.keys(deltaByBucket).length === 0) return;
     updateGoals(goals.map((g) => (
-      deltaByBucket[g.id] ? { ...g, saved: Math.max(0, g.saved + deltaByBucket[g.id]) } : g
+      deltaByBucket[g.id] ? { ...g, saved: Math.max(0, Math.round((g.saved + deltaByBucket[g.id]) * 100) / 100) } : g
     )));
   }
 
